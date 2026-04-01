@@ -12,11 +12,14 @@ and escalates to VLM or OCR automatically.
 """
 
 import io
+import os
 import re
 import base64
 import hashlib
 import logging
 import subprocess
+import tempfile
+from functools import lru_cache
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -31,6 +34,9 @@ from app.config import (
     ENABLE_OCR,
     MARKER_OUTPUT_DIR,
     OLLAMA_BASE_URL,
+    OCR_ENGINE,
+    PADDLEOCR_DEFAULT_LANG,
+    TEMP_DIR,
     VLM_EXTRACTION_ENABLED,
     VLM_EXTRACTION_MODEL,
     LARGE_FILE_FAST_MODE,
@@ -166,15 +172,23 @@ def _make_page_document(
 # ═══════════════════════════════════════════════════════════════════════
 
 def detect_language(text: str) -> str:
-    """Detect language. Checks for Korean characters first."""
+    """Detect language. Checks for Japanese and Korean characters first."""
     text = text.strip()
     if len(text) < 10:
         return "unknown"
 
+    # Check for Japanese characters (Hiragana, Katakana, Kanji)
+    japanese_chars = len(re.findall(r'[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]', text))
+    # Check for Korean characters
     korean_chars = len(re.findall(r'[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]', text))
-    total_alpha = len(re.findall(r'[a-zA-Z\uAC00-\uD7AF]', text))
+    
+    total_chars = len(re.findall(r'[a-zA-Z\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]', text))
 
-    if total_alpha > 0 and korean_chars / max(total_alpha, 1) > 0.3:
+    # Prioritize Japanese if more Japanese characters are detected
+    if total_chars > 0 and japanese_chars / max(total_chars, 1) > 0.3:
+        return "ja"
+    # Then check for Korean
+    if total_chars > 0 and korean_chars / max(total_chars, 1) > 0.3:
         return "ko"
 
     try:
@@ -506,29 +520,190 @@ def _prepare_image_for_ocr(image: Image.Image, min_width: int = 1800) -> Image.I
     return normalized
 
 
-def _extract_with_tesseract_variants(image: Image.Image) -> tuple:
-    """Run OCR with multiple preprocessing/config variants and keep the best result."""
-    candidates: List[tuple[str, str, float]] = []
+def _get_ocr_language(detected_lang: str) -> str:
+    """Map detected language to pytesseract language code."""
+    lang_map = {
+        "ja": "jpn+eng",      # Japanese
+        "ko": "kor+eng",      # Korean
+        "en": "eng",          # English
+        "zh": "chi_sim+eng",  # Chinese (Simplified)
+    }
+    return lang_map.get(detected_lang, "eng")
 
+
+def _get_paddle_language(detected_lang: str) -> str:
+    """Map detected language to PaddleOCR language code."""
+    lang_map = {
+        "ja": "japan",
+        "ko": "korean",
+        "en": "en",
+        "zh": "ch",
+    }
+    return lang_map.get(detected_lang, PADDLEOCR_DEFAULT_LANG or "korean")
+
+
+def _configure_paddlex_cache_home() -> str:
+    """Keep PaddleX cache files in a writable temp directory."""
+    cache_dir = TEMP_DIR / "paddlex_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("PADDLE_PDX_CACHE_HOME", str(cache_dir))
+    os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+    return str(cache_dir)
+
+
+@lru_cache(maxsize=4)
+def _get_paddle_ocr_engine(lang: str):
+    """Initialize PaddleOCR lazily so the app still works when it is not installed."""
+    _configure_paddlex_cache_home()
+    try:
+        from paddleocr import PaddleOCR
+    except ImportError:
+        logger.info("PaddleOCR is not installed; OCR will fall back to Tesseract.")
+        return None
+
+    candidate_kwargs = [
+        {"lang": lang, "show_log": False, "use_angle_cls": True},
+        {"lang": lang, "use_angle_cls": True},
+        {"lang": lang},
+    ]
+
+    for kwargs in candidate_kwargs:
+        try:
+            return PaddleOCR(**kwargs)
+        except Exception as e:
+            logger.debug("PaddleOCR init attempt failed (%s, %s): %s", lang, kwargs, e)
+
+    logger.warning("Failed to initialize PaddleOCR (%s) after trying compatibility fallbacks.", lang)
+    return None
+
+
+def _flatten_paddle_result_text(result: Any) -> str:
+    """Extract text lines from PaddleOCR outputs across version-specific shapes."""
+    lines: List[str] = []
+
+    def _walk(node: Any) -> None:
+        if node is None:
+            return
+        if isinstance(node, str):
+            cleaned = node.strip()
+            if cleaned:
+                lines.append(cleaned)
+            return
+        if isinstance(node, tuple):
+            if len(node) >= 1 and isinstance(node[0], str):
+                cleaned = node[0].strip()
+                if cleaned:
+                    lines.append(cleaned)
+                return
+            for item in node:
+                _walk(item)
+            return
+        if isinstance(node, list):
+            if len(node) >= 2 and isinstance(node[1], (list, tuple)):
+                maybe_text = node[1][0] if node[1] else None
+                if isinstance(maybe_text, str):
+                    cleaned = maybe_text.strip()
+                    if cleaned:
+                        lines.append(cleaned)
+                    return
+            for item in node:
+                _walk(item)
+
+    _walk(result)
+    return "\n".join(line for line in lines if line).strip()
+
+
+def _run_paddle_ocr_on_variant(image: Image.Image, detected_lang: str = "en") -> str:
+    """Run PaddleOCR on one temporary PNG variant and return normalized text."""
+    paddle_lang = _get_paddle_language(detected_lang)
+    ocr_engine = _get_paddle_ocr_engine(paddle_lang)
+    if ocr_engine is None:
+        return ""
+
+    temp_path: Optional[Path] = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as handle:
+            temp_path = Path(handle.name)
+        image.save(temp_path, format="PNG")
+        try:
+            result = ocr_engine.ocr(str(temp_path), cls=True)
+        except TypeError:
+            try:
+                result = ocr_engine.ocr(str(temp_path))
+            except TypeError:
+                result = ocr_engine.predict(str(temp_path))
+        return _normalize_extracted_text(_flatten_paddle_result_text(result))
+    except Exception as e:
+        logger.debug("PaddleOCR failed (%s): %s", paddle_lang, e)
+        return ""
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+def _preferred_ocr_backends() -> List[str]:
+    """Return OCR backends in priority order based on configuration."""
+    if OCR_ENGINE == "tesseract":
+        return ["tesseract"]
+    if OCR_ENGINE == "paddle":
+        return ["paddle", "tesseract"]
+    return ["paddle", "tesseract"]
+
+
+def _build_ocr_variants(image: Image.Image) -> List[tuple[str, Image.Image]]:
+    """Prepare a small set of OCR-friendly image variants."""
     grayscale = ImageOps.grayscale(image)
     enhanced = ImageEnhance.Contrast(grayscale).enhance(1.8).filter(ImageFilter.SHARPEN)
     binary = enhanced.point(lambda px: 255 if px >= 170 else 0)
-
-    variants = [
+    return [
+        ("prepared", image),
         ("gray", grayscale),
         ("enhanced", enhanced),
         ("binary", binary),
     ]
+
+
+def _extract_with_paddle_variants(image: Image.Image, detected_lang: str = "en") -> tuple[str, str]:
+    """Run PaddleOCR across a few image variants and keep the best result."""
+    candidates: List[tuple[str, str, float]] = []
+
+    for variant_name, variant in _build_ocr_variants(image):
+        normalized = _run_paddle_ocr_on_variant(variant, detected_lang=detected_lang)
+        if len(normalized) < 10:
+            continue
+
+        score = _score_extraction_candidate(normalized, "ocr_image", "scanned")
+        candidates.append((normalized, variant_name, score))
+
+    if not candidates:
+        return "", "paddleocr"
+
+    best_text, best_variant, best_score = max(candidates, key=lambda item: item[2])
+    logger.debug(
+        "PaddleOCR best variant selected: %s (score=%.2f)",
+        best_variant,
+        best_score,
+    )
+    return best_text, "paddleocr"
+
+
+def _extract_with_tesseract_variants(image: Image.Image, detected_lang: str = "en") -> tuple[str, str]:
+    """Run OCR with multiple preprocessing/config variants and keep the best result."""
+    candidates: List[tuple[str, str, float]] = []
+    ocr_lang = _get_ocr_language(detected_lang)
     configs = [
         "--oem 1 --psm 6",
         "--oem 1 --psm 4",
         "--oem 1 --psm 11",
     ]
 
-    for variant_name, variant in variants:
+    for variant_name, variant in _build_ocr_variants(image):
         for config in configs:
             try:
-                raw = pytesseract.image_to_string(variant, lang="kor+eng", config=config)
+                raw = pytesseract.image_to_string(variant, lang=ocr_lang, config=config)
             except Exception as e:
                 logger.debug("Image OCR variant failed (%s, %s): %s", variant_name, config, e)
                 continue
@@ -541,7 +716,7 @@ def _extract_with_tesseract_variants(image: Image.Image) -> tuple:
             candidates.append((normalized, f"{variant_name}:{config}", score))
 
     if not candidates:
-        return "", "ocr_image"
+        return "", "tesseract"
 
     best_text, best_variant, best_score = max(candidates, key=lambda item: item[2])
     logger.debug(
@@ -549,7 +724,31 @@ def _extract_with_tesseract_variants(image: Image.Image) -> tuple:
         best_variant,
         best_score,
     )
-    return best_text, "ocr_image"
+    return best_text, "tesseract"
+
+
+def _extract_with_best_ocr_variants(image: Image.Image, detected_lang: str = "en") -> tuple[str, str]:
+    """Run the configured OCR backends and keep the strongest extraction."""
+    candidates: List[tuple[str, str, float]] = []
+
+    for backend in _preferred_ocr_backends():
+        if backend == "paddle":
+            text, extractor = _extract_with_paddle_variants(image, detected_lang=detected_lang)
+        else:
+            text, extractor = _extract_with_tesseract_variants(image, detected_lang=detected_lang)
+
+        normalized = _normalize_extracted_text(text)
+        if len(normalized) < 10:
+            continue
+
+        score = _score_extraction_candidate(normalized, "ocr_image", "scanned")
+        candidates.append((normalized, extractor, score))
+
+    if not candidates:
+        return "", "none"
+
+    best_text, best_extractor, _ = max(candidates, key=lambda item: item[2])
+    return best_text, best_extractor
 
 def _score_extraction_candidate(
     text: str,
@@ -781,19 +980,19 @@ def _extract_with_vlm(pdf_path: str, artifact_meta: dict) -> List[Document]:
 # Method 4: Tesseract OCR (last resort)
 # ═══════════════════════════════════════════════════════════════════════
 
-def _ocr_pdf_page(pdf_path: str, page_number: int) -> str:
-    """OCR a single page using tesseract."""
+def _ocr_pdf_page(pdf_path: str, page_number: int, detected_lang: str = "en") -> tuple[str, str]:
+    """OCR a single page using the configured OCR backend chain."""
     if not ENABLE_OCR:
-        return ""
+        return "", "none"
     try:
         image = _render_pdf_page_image(pdf_path, page_number, dpi=_OCR_RENDER_DPI)
         if image is None:
-            return ""
-        text = pytesseract.image_to_string(image, lang="kor+eng")
-        return (text or "").strip()
+            return "", "none"
+        prepared = _prepare_image_for_ocr(image)
+        return _extract_with_best_ocr_variants(prepared, detected_lang=detected_lang)
     except Exception as e:
         logger.warning("OCR failed (page %d): %s", page_number, e)
-        return ""
+        return "", "none"
 
 
 def _extract_with_ocr(pdf_path: str, artifact_meta: dict) -> List[Document]:
@@ -814,7 +1013,8 @@ def _extract_with_ocr(pdf_path: str, artifact_meta: dict) -> List[Document]:
     for page_num in range(1, total_pages + 1):
         page_text_layer = pdf_doc[page_num - 1].get_text("text").strip()
         page_kind = "hybrid" if page_text_layer else "scanned"
-        text = _ocr_pdf_page(pdf_path, page_num)
+        detected_lang = detect_language(page_text_layer[:300]) if page_text_layer else "en"
+        text, extractor = _ocr_pdf_page(pdf_path, page_num, detected_lang=detected_lang)
         if not text or len(text.strip()) < 10:
             continue
 
@@ -825,7 +1025,7 @@ def _extract_with_ocr(pdf_path: str, artifact_meta: dict) -> List[Document]:
             extraction_method="ocr",
             page_kind=page_kind,
             chunk_type="page",
-            extractors_used="tesseract",
+            extractors_used=extractor,
         ))
 
     pdf_doc.close()
@@ -840,6 +1040,7 @@ def _build_page_candidate_document(
     page_analysis: Dict[str, Any],
     routing_reason: str,
     fallback_chain: str,
+    extractor_override: str = "",
 ) -> Optional[Document]:
     """Create a page document candidate with consistent Stage 1 metadata."""
     normalized_text = _normalize_extracted_text(text)
@@ -857,7 +1058,7 @@ def _build_page_candidate_document(
             primary_heading = guessed[0]
             heading_candidates = " | ".join(guessed)
 
-    extractors_used = {
+    extractors_used = extractor_override or {
         "text": "pymupdf",
         "vlm": "qwen2.5vl",
         "ocr": "tesseract",
@@ -1080,9 +1281,13 @@ def _parse_pdf_page(
                 candidates.append(candidate)
 
     if rendered_page is not None and ENABLE_OCR:
-        ocr_text = pytesseract.image_to_string(rendered_page, lang="kor+eng")
+        detected_lang = detect_language(page_analysis["text"][:300]) if page_analysis["text"] else "en"
+        ocr_text, ocr_extractor = _extract_with_best_ocr_variants(
+            _prepare_image_for_ocr(rendered_page),
+            detected_lang=detected_lang,
+        )
         if ocr_text and len(ocr_text.strip()) >= 10:
-            ocr_chain = fallback_chain + ["tesseract"]
+            ocr_chain = fallback_chain + [ocr_extractor]
             candidate = _build_page_candidate_document(
                 text=ocr_text,
                 artifact_meta=artifact_meta,
@@ -1091,6 +1296,7 @@ def _parse_pdf_page(
                 page_analysis=page_analysis,
                 routing_reason=routing_reason,
                 fallback_chain=">".join(ocr_chain),
+                extractor_override=ocr_extractor,
             )
             if candidate is not None:
                 candidates.append(candidate)
@@ -1290,19 +1496,20 @@ def parse_pdf(pdf_path: str) -> List[Document]:
 # Image Parsing
 # ═══════════════════════════════════════════════════════════════════════
 
-def extract_text_from_image(image_path: str) -> tuple:
+def extract_text_from_image(image_path: str) -> tuple[str, str, str]:
     """
     OCR an image file by comparing VLM and OCR candidates.
-    Returns (text, method) where method is 'vlm' or 'ocr_image'.
+    Returns (text, method, extractor) where method is 'vlm' or 'ocr_image'.
     """
     try:
         with Image.open(image_path) as opened_image:
             prepared = _prepare_image_for_ocr(opened_image)
     except Exception as e:
         logger.warning("Image open failed for %s: %s", image_path, e)
-        return "", "none"
+        return "", "none", "none"
 
-    candidates: List[tuple[str, str, float]] = []
+    candidates: List[tuple[str, str, str, float]] = []
+    detected_lang = "en"  # Default language
 
     if VLM_EXTRACTION_ENABLED:
         try:
@@ -1310,36 +1517,38 @@ def extract_text_from_image(image_path: str) -> tuple:
             vlm_raw = _vlm_extract_page(img_b64, 1, timeout=max(_VLM_FIRST_PAGE_TIMEOUT, _VLM_PAGE_TIMEOUT))
             vlm_text = _normalize_extracted_text(vlm_raw)
             if len(vlm_text) >= 10:
+                detected_lang = detect_language(vlm_text)  # Detect language from VLM result
                 vlm_score = _score_extraction_candidate(vlm_text, "vlm", "scanned")
-                candidates.append((vlm_text, "vlm", vlm_score))
+                candidates.append((vlm_text, "vlm", "qwen2.5vl", vlm_score))
         except Exception as e:
             logger.debug("VLM image extraction failed, falling back to OCR variants: %s", e)
 
     if ENABLE_OCR:
         try:
-            ocr_text, ocr_method = _extract_with_tesseract_variants(prepared)
+            ocr_text, ocr_extractor = _extract_with_best_ocr_variants(prepared, detected_lang)
             if len(ocr_text) >= 10:
                 ocr_score = _score_extraction_candidate(ocr_text, "ocr_image", "scanned")
-                candidates.append((ocr_text, ocr_method, ocr_score))
+                candidates.append((ocr_text, "ocr_image", ocr_extractor, ocr_score))
         except Exception as e:
             logger.debug("Image OCR variants failed for %s: %s", image_path, e)
 
     if not candidates:
-        return "", "none"
+        return "", "none", "none"
 
-    best_text, best_method, _ = max(candidates, key=lambda item: item[2])
-    return best_text, best_method
+    best_text, best_method, best_extractor, _ = max(candidates, key=lambda item: item[3])
+    return best_text, best_method, best_extractor
 
 
 def parse_image(image_path: str) -> List[Document]:
     """Parse an image file into a Document."""
-    text, method = extract_text_from_image(image_path)
+    text, method, extractor = extract_text_from_image(image_path)
     if not text:
         return []
 
     image_file = Path(image_path)
     artifact_meta = _build_artifact_meta(image_file, page_total=1, input_type="image")
-    extractors_used = "qwen2.5vl" if method == "vlm" else "tesseract"
+    extraction_method = "vlm" if method == "vlm" else "ocr_image"
+    extractors_used = "qwen2.5vl" if method == "vlm" else extractor
     heading_candidates = _extract_heading_candidates_from_text(text)
 
     try:
@@ -1352,7 +1561,7 @@ def parse_image(image_path: str) -> List[Document]:
         text=text,
         base_meta=artifact_meta,
         page=1,
-        extraction_method=method,
+        extraction_method=extraction_method,
         page_kind="scanned",
         chunk_type="image",
         extractors_used=extractors_used,

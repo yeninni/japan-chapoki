@@ -3,7 +3,10 @@
 # Install after the base environment if you want:
 # - reranking via FlagEmbedding
 # - live web search via Tavily
+# - PaddleOCR-based OCR fallback
 
 FlagEmbedding>=1.2.0
 tavily-python>=0.3.0
 duckduckgo-search>=6.0.0
+# Install PaddleOCR and the matching Paddle runtime separately for your CPU/GPU.
+# paddleocr>=2.8.1

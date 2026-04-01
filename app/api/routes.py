@@ -25,6 +25,7 @@ from app.config import (
     UPLOADS_DIR,
     CHROMA_DIR,
     ENABLE_OCR,
+    OCR_ENGINE,
     VISION_MODEL,
     WHISPER_MODEL,
     DUCKDUCKGO_REGION,
@@ -84,7 +85,7 @@ def _ui_chats_state_path(user_id: Optional[str]) -> Path:
 def _resolve_upload_target(filename: str, user_id: Optional[str]) -> Tuple[Path, Optional[str], str]:
     safe_filename = Path(filename or "").name
     if not safe_filename:
-        raise HTTPException(status_code=400, detail="유효한 파일명이 필요합니다.")
+        raise HTTPException(status_code=400, detail="有効なファイル名が必要です。")
 
     normalized_user_id = _normalize_user_id(user_id)
     target_dir = UPLOADS_DIR / normalized_user_id if normalized_user_id else UPLOADS_DIR
@@ -106,6 +107,7 @@ def root():
         "uploads_dir": str(UPLOADS_DIR),
         "chroma_dir": str(CHROMA_DIR),
         "ocr_enabled": ENABLE_OCR,
+        "ocr_engine": OCR_ENGINE,
     }
 
 
@@ -124,6 +126,7 @@ def health():
             "available_models": AVAILABLE_MODELS,
             "documents_in_vectorstore": stats["total_chunks"],
             "ocr_enabled": ENABLE_OCR,
+            "ocr_engine": OCR_ENGINE,
             "vision_model": VISION_MODEL,
             "stt_model": WHISPER_MODEL,
             "web_search_provider": "tavily_or_duckduckgo",
@@ -242,9 +245,9 @@ def chat(req: ChatRequest):
 @router.post("/chat-with-file")
 async def chat_with_file(
     file: UploadFile = File(...),
-    message: str = Form(default="이 문서의 내용을 요약해줘"),
+    message: str = Form(default="このドキュメントの内容を要約してください"),
     model: str = Form(default=None),
-    web_search_enabled: bool = Form(default=True),
+    web_search_enabled: bool = Form(default=False),
     user_id: Optional[str] = Form(default=None),
 ):
     """
@@ -287,8 +290,8 @@ async def chat_with_file(
     if ingest_result.get("count", 0) == 0:
         return {
             "model": OLLAMA_MODEL,
-            "answer": f"파일 '{file.filename}'에서 텍스트를 추출하지 못했습니다. "
-                      "스캔된 이미지 PDF일 수 있습니다. OCR 설정을 확인해주세요.",
+            "answer": f"ファイル '{file.filename}' からテキストを抽出できませんでした。 "
+                      "スキャンされたイメージPDFの可能性があります。OCR設定を確認してください。",
             "sources": [],
             "mode": "document_qa",
             "ingest": ingest_result,
@@ -659,7 +662,7 @@ async def chat_audio(
     active_doc_id: Optional[str] = Form(default=None),
     active_source_type: Optional[str] = Form(default=None),
     system_prompt: Optional[str] = Form(default=None),
-    web_search_enabled: bool = Form(default=True),
+    web_search_enabled: bool = Form(default=False),
 ):
     """Transcribe audio and pass the recognized text through the normal chat flow."""
     try:

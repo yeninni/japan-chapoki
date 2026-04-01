@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="ja">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>삼육재단AI</title>
+    <title>Tilon AI チャットボット</title>
     <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -168,12 +168,12 @@
 
 <div class="modal-bg" id="sp-modal">
     <div class="modal">
-        <h3>⚙️ 시스템 프롬프트 설정</h3>
-        <p>AI의 역할과 응답 방식을 지정하세요.</p>
-        <textarea id="sp-input" placeholder="예: 당신은 사내 법무팀 삼육재단AI입니다."></textarea>
+        <h3>⚙️ システムプロンプト設定</h3>
+        <p>AIの役割と応答方法を指定してください。</p>
+        <textarea id="sp-input" placeholder="例: あなたはTilon AIアシスタントです。"></textarea>
         <div class="modal-btns">
-            <button class="mbtn cancel" onclick="closeModal('sp-modal')">취소</button>
-            <button class="mbtn save" onclick="savePrompt()">저장</button>
+            <button class="mbtn cancel" onclick="closeModal('sp-modal')">キャンセル</button>
+            <button class="mbtn save" onclick="savePrompt()">保存</button>
         </div>
     </div>
 </div>
@@ -181,15 +181,15 @@
 <div id="login-screen">
     <div class="login-card">
         <div class="login-logo">
-<img class="brand-mark login" src="/static/swf-logo.svg?v=1" alt="삼육재단AI 로고">
-            <span>삼육재단AI</span>
+<img class="brand-mark login" src="/static/swf-logo.svg?v=1" alt="Tilon AI ロゴ">
+            <span>Tilon AI</span>
         </div>
-        <h2>로그인</h2>
-        <p>직원 계정으로 로그인하세요</p>
-        <div class="fg"><label>아이디</label><input type="text" id="li-id" placeholder="아이디 입력" autocomplete="off"></div>
-        <div class="fg"><label>비밀번호</label><input type="password" id="li-pw" placeholder="비밀번호 입력"></div>
-        <button class="login-btn" onclick="doLogin()">로그인</button>
-        <div class="login-err" id="li-err">아이디 또는 비밀번호가 올바르지 않습니다.</div>
+        <h2>ログイン</h2>
+        <p>職員アカウントでログインしてください</p>
+        <div class="fg"><label>ユーザーID</label><input type="text" id="li-id" placeholder="ユーザーIDを入力" autocomplete="off"></div>
+        <div class="fg"><label>パスワード</label><input type="password" id="li-pw" placeholder="パスワードを入力"></div>
+        <button class="login-btn" onclick="doLogin()">ログイン</button>
+        <div class="login-err" id="li-err">ユーザーIDまたはパスワードが正しくありません。</div>
     </div>
 </div>
 
@@ -197,41 +197,41 @@
     <div class="sidebar">
         <div class="sb-header">
             <div class="ws-name">
-<img class="brand-mark sidebar" src="/static/swf-logo.svg?v=1" alt="삼육재단AI 로고">
-                삼육재단AI
+<img class="brand-mark sidebar" src="/static/swf-logo.svg?v=1" alt="Tilon AI ロゴ">
+                Tilon AI
             </div>
-            <div class="us-status"><div class="sdot"></div><span id="sb-user">직원</span></div>
+            <div class="us-status"><div class="sdot"></div><span id="sb-user">ユーザー</span></div>
         </div>
 
         <div class="sb-search">
             <div class="sb-search-box">
                 <span>🔎</span>
-                <input type="text" placeholder="채팅 검색..." oninput="filterChats(this.value)">
+                <input type="text" placeholder="チャットを検索..." oninput="filterChats(this.value)">
             </div>
         </div>
 
-        <div class="sb-sec"><div class="sb-sec-title">채팅 목록</div></div>
-        <button class="new-btn" onclick="newChat()">＋ 새 채팅</button>
+        <div class="sb-sec"><div class="sb-sec-title">チャット一覧</div></div>
+        <button class="new-btn" onclick="newChat()">＋ 新しいチャット</button>
         <div class="chat-list" id="chat-list"></div>
 
-        <div class="sb-sec"><div class="sb-sec-title">업로드 파일 보관소 <span class="shelf-count" id="shelf-count">0개</span></div></div>
+        <div class="sb-sec"><div class="sb-sec-title">アップロードファイル保管庫 <span class="shelf-count" id="shelf-count">0個</span></div></div>
         <div class="shelf-wrap">
             <div class="shelf-head">
-                <button class="shelf-upload-btn" id="shelf-upload-btn" onclick="openShelfUpload()">📎 파일 업로드</button>
-                <button class="shelf-stop-btn" id="shelf-stop-btn" type="button" onclick="stopShelfUpload()">⏹ 중단</button>
+                <button class="shelf-upload-btn" id="shelf-upload-btn" onclick="openShelfUpload()">📎 ファイルをアップロード</button>
+                <button class="shelf-stop-btn" id="shelf-stop-btn" type="button" onclick="stopShelfUpload()">⏹ 停止</button>
             </div>
             <div class="shelf-list" id="shelf-list">
-                <div class="shelf-empty">업로드된 파일이 없습니다.</div>
+                <div class="shelf-empty">アップロードされたファイルはありません。</div>
             </div>
             <input type="file" id="shelf-file" accept=".pdf,.png,.jpg,.jpeg,.webp" multiple style="display:none" onchange="uploadToShelf(this)">
         </div>
 
         <div class="quick-menu">
             <div class="sb-sec">
-                <div class="sb-sec-title">빠른 메뉴</div>
-                <div class="sb-item" onclick="quickMsg('오늘 할 일 목록 정리해줘')"><span class="ic">✅</span> 업무 정리</div>
-                <div class="sb-item" onclick="quickMsg('이메일 초안 작성해줘')"><span class="ic">✉️</span> 이메일 작성</div>
-                <div class="sb-item" onclick="quickMsg('회의록 요약해줘')"><span class="ic">📄</span> 회의록 요약</div>
+                <div class="sb-sec-title">クイックメニュー</div>
+                <div class="sb-item" onclick="quickMsg('今日のタスクを整理してください')"><span class="ic">✅</span> タスク整理</div>
+                <div class="sb-item" onclick="quickMsg('メール下書きを作成してください')"><span class="ic">✉️</span> メール作成</div>
+                <div class="sb-item" onclick="quickMsg('会議録を要約してください')"><span class="ic">📄</span> 会議録要約</div>
             </div>
         </div>
 
@@ -239,10 +239,10 @@
             <div class="user-row">
                 <div class="avatar" id="u-avatar">A</div>
                 <div class="ur-text">
-                    <div class="ur-name" id="u-name">직원</div>
-                    <div class="ur-role" id="u-role">일반 직원</div>
+                    <div class="ur-name" id="u-name">ユーザー</div>
+                    <div class="ur-role" id="u-role">一般従業員</div>
                 </div>
-                <button class="logout-btn" onclick="doLogout()">로그아웃</button>
+                <button class="logout-btn" onclick="doLogout()">ログアウト</button>
             </div>
         </div>
     </div>
@@ -250,20 +250,20 @@
     <div class="chat-area">
         <div class="chat-header">
             <span style="font-size:16px">💬</span>
-            <h3 id="hdr-title">새 채팅</h3>
+            <h3 id="hdr-title">新しいチャット</h3>
             <span class="model-chip" id="model-chip">qwen2.5:7b</span>
-            <button class="hdr-btn" onclick="openModal('sp-modal')">⚙️ 프롬프트</button>
+            <button class="hdr-btn" onclick="openModal('sp-modal')">⚙️ プロンプト</button>
         </div>
 
         <div class="messages" id="messages"></div>
 
         <div class="input-area">
             <div class="input-box">
-                <textarea id="msg-input" rows="1" placeholder="메시지 입력... (Shift+Enter 줄바꿈)"></textarea>
+                <textarea id="msg-input" rows="1" placeholder="メッセージを入力... (Shift+Enterで改行)\"></textarea>
                 <button class="stop-btn" id="stop-btn" onclick="stopGeneration()" style="display:none">⏹</button>
                 <button class="send-btn" id="send-btn" onclick="sendMsg()">➤</button>
             </div>
-            <div class="input-hint">AI가 실수할 수 있습니다. 중요한 정보는 반드시 확인하세요.</div>
+            <div class="input-hint">AIエラーの可能性があります。重要な情報は必ず確認してください。</div>
         </div>
     </div>
 </div>
@@ -272,9 +272,9 @@
     const API = window.location.origin;
 
     const USERS = JSON.parse(localStorage.getItem('ai_users') || 'null') || {
-        'admin': { pw: 'admin123', role: '관리자' },
-        'tilon': { pw: 'tilon123', role: '일반 직원' },
-        '직원1': { pw: '1234', role: '일반 직원' }
+        'admin': { pw: 'admin123', role: '管理者' },
+        'tilon': { pw: 'tilon123', role: '一般従業員' },
+        'employee1': { pw: '1234', role: '一般従業員' }
     };
 
     const CHAT_KEY_PREFIX = 'ai_chats';
@@ -283,7 +283,7 @@
     const MAX_SHELF_FILES = 90;
     const HISTORY_MAX_MESSAGES = 12;
 
-    const DEFAULT_SYSTEM_PROMPT = '당신은 삼육재단AI입니다. 한국어로 친절하고 명확하게 답변하세요. 중국어(한자)는 절대 사용하지 마세요.';
+    const DEFAULT_SYSTEM_PROMPT = 'あなたはTilon AIです。日本語で親切かつ明確に回答してください。中国語(漢字)は絶対に使用しないでください。';
 
     let currentUser = null;
     let isLoading = false;
@@ -297,7 +297,7 @@
     let shelfUploadCancelRequested = false;
 
     function now() {
-        return new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+        return new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
     }
 
     function esc(t) {
@@ -315,11 +315,11 @@
         const list = Array.isArray(raw) ? raw : [];
         return list.map(chat => ({
             id: chat.id || ('c_' + Date.now()),
-            title: chat.title || '새 채팅',
+            title: chat.title || '新しいチャット',
             active_source: chat.active_source || null,
             active_doc_id: chat.active_doc_id || null,
             messages: Array.isArray(chat.messages) ? chat.messages.map(m => ({
-                sender: m.sender || '삼육재단AI',
+                sender: m.sender || 'Tilon AI',
                 text: m.text || '',
                 isUser: !!m.isUser,
                 hasScope: false
@@ -340,7 +340,7 @@
             if (!doc.source) return;
             map.set(docKey(doc), doc);
         });
-        return Array.from(map.values()).sort((a, b) => String(a.source).localeCompare(String(b.source), 'ko'));
+        return Array.from(map.values()).sort((a, b) => String(a.source).localeCompare(String(b.source), 'ja'));
     }
 
     function docKey(doc) {
@@ -468,12 +468,12 @@
         systemPrompt = document.getElementById('sp-input').value.trim() || DEFAULT_SYSTEM_PROMPT;
         if (currentUser) localStorage.setItem(userScopedKey(SYS_PROMPT_KEY_PREFIX), systemPrompt);
         closeModal('sp-modal');
-        toast('✅ 시스템 프롬프트 저장됨');
+        toast('✅ システムプロンプトが保存されました');
     }
 
     function newChat() {
         const id = 'c_' + Date.now();
-        chats.unshift({ id, title: '새 채팅', active_source: null, active_doc_id: null, messages: [] });
+        chats.unshift({ id, title: '新しいチャット', active_source: null, active_doc_id: null, messages: [] });
         saveChats();
         renderChatList();
         loadChat(id);
@@ -494,12 +494,12 @@
 
         if (chat.messages.length === 0) {
             msgs.innerHTML = `<div class="welcome" id="welcome">
-                <h2>무엇을 도와드릴까요?</h2>
-                <p>업로드 파일이 있으면 참고하고, 일반 질문도 자연스럽게 이어서 답변합니다.</p>
+                <h2>何かお手伝いできることはありますか?</h2>
+                <p>アップロードされたファイルがある場合はそれを参照し、一般的な質問にも自然に答えます。</p>
                 <div class="quick-btns">
-                    <button class="qb" onclick="quickMsg('오늘 할 일 정리해줘')">📝 할 일 정리</button>
-                    <button class="qb" onclick="quickMsg('이메일 답변 작성해줘')">✉️ 이메일 작성</button>
-                    <button class="qb" onclick="quickMsg('업무 보고서 형식 알려줘')">📊 보고서 작성</button>
+                    <button class="qb" onclick="quickMsg('今日のタスクを整理してください')">📝 タスク整理</button>
+                    <button class="qb" onclick="quickMsg('メール返信を作成してください')">✉️ メール作成</button>
+                    <button class="qb" onclick="quickMsg('レポート作成のフォーマットを教えてください')">📊 レポート作成</button>
                 </div>
             </div>`;
         } else {
@@ -552,12 +552,12 @@
     }
 
     function renderScopeBanner() {
-        // 단일 문서 스코프 UI 비활성화: 항상 업로드 전체 기준
+        // Single-document scope UI is disabled: always use the uploaded-files scope.
         return;
     }
 
     function setActiveDocument(source, docId, silent) {
-        // 단일 문서 스코프를 사용하지 않음
+        // Single-document scope is intentionally disabled.
         return;
     }
 
@@ -567,7 +567,7 @@
 
     function openShelfUpload() {
         if (shelfUploadInProgress) {
-            toast('업로드 진행 중입니다. 중단 후 다시 시도하세요.');
+            toast('アップロード進行中です。停止してからやり直してください。');
             return;
         }
         document.getElementById('shelf-file').click();
@@ -577,7 +577,7 @@
         const btn = document.getElementById('shelf-upload-btn');
         const stopBtn = document.getElementById('shelf-stop-btn');
         btn.disabled = true;
-        btn.textContent = `⏳ 업로드 중... (${done}/${total})`;
+        btn.textContent = `⏳ アップロード中... (${done}/${total})`;
         btn.title = currentFile || '';
         stopBtn.classList.add('show');
     }
@@ -586,7 +586,7 @@
         const btn = document.getElementById('shelf-upload-btn');
         const stopBtn = document.getElementById('shelf-stop-btn');
         btn.disabled = false;
-        btn.textContent = '📎 파일 업로드';
+        btn.textContent = '📎 ファイルをアップロード';
         btn.title = '';
         stopBtn.classList.remove('show');
     }
@@ -595,7 +595,7 @@
         if (!shelfUploadInProgress) return;
         shelfUploadCancelRequested = true;
         if (shelfUploadAbortController) shelfUploadAbortController.abort();
-        toast('⏹ 업로드 중단 요청됨');
+        toast('⏹ アップロード中断要求');
     }
 
     function upsertDoc(doc) {
@@ -609,14 +609,14 @@
             chunks: Number(doc.chunks || prev.chunks || 0),
             uploaded_at: doc.uploaded_at || prev.uploaded_at || Date.now()
         });
-        uploadedDocs = Array.from(map.values()).sort((a, b) => String(a.source).localeCompare(String(b.source), 'ko'));
+        uploadedDocs = Array.from(map.values()).sort((a, b) => String(a.source).localeCompare(String(b.source), 'ja'));
         saveDocs();
     }
 
     function updateShelfCount() {
         const el = document.getElementById('shelf-count');
         if (!el) return;
-        el.textContent = `${uploadedDocs.length}개`;
+        el.textContent = `${uploadedDocs.length}個`;
     }
 
     function renderShelfDocs() {
@@ -624,7 +624,7 @@
         const list = document.getElementById('shelf-list');
 
         if (!uploadedDocs.length) {
-            list.innerHTML = '<div class="shelf-empty">업로드된 파일이 없습니다.</div>';
+            list.innerHTML = '<div class="shelf-empty">アップロードされたファイルはありません。</div>';
             return;
         }
 
@@ -641,12 +641,12 @@
             nameBtn.className = 'shelf-item-name';
             nameBtn.textContent = doc.source;
             nameBtn.title = doc.source;
-            nameBtn.onclick = () => toast('업로드된 모든 파일 기준으로 답변합니다.');
+            nameBtn.onclick = () => toast('アップロードされたすべてのファイルを基準に回答します。');
 
             const delBtn = document.createElement('button');
             delBtn.type = 'button';
             delBtn.className = 'shelf-del-btn';
-            delBtn.textContent = '삭제';
+            delBtn.textContent = '削除';
             delBtn.onclick = (evt) => {
                 evt.stopPropagation();
                 deleteShelfDoc(doc);
@@ -654,7 +654,7 @@
 
             const meta = document.createElement('div');
             meta.className = 'shelf-item-meta';
-            meta.textContent = doc.chunks ? (doc.chunks + ' chunks') : 'chunk 정보 없음';
+            meta.textContent = doc.chunks ? (doc.chunks + ' chunks') : 'chunk情報なし';
 
             top.appendChild(nameBtn);
             top.appendChild(delBtn);
@@ -670,7 +670,7 @@
 
     async function deleteShelfDoc(doc) {
         if (!doc || !doc.source) return;
-        if (!confirm(`"${doc.source}" 파일을 삭제할까요?`)) return;
+        if (!confirm(`"${doc.source}" を削除しますか？`)) return;
 
         try {
             const query = new URLSearchParams();
@@ -687,11 +687,11 @@
                     uploadedDocs = uploadedDocs.filter(d => docKey(d) !== docKey(doc));
                     saveDocs();
                     renderShelfDocs();
-                    toast('서버에는 없어 목록에서만 제거했습니다.');
+                    toast('サーバーには存在しなかったため、一覧からのみ削除しました。');
                     await syncDocsFromServer();
                     return;
                 }
-                throw new Error(data.detail || '삭제 실패');
+                throw new Error(data.detail || '削除に失敗しました');
             }
 
             uploadedDocs = uploadedDocs.filter(d => docKey(d) !== docKey(doc));
@@ -702,9 +702,9 @@
             renderChatList();
             renderScopeBanner();
             await syncDocsFromServer();
-            toast(data.message || '삭제 완료');
+            toast(data.message || '削除が完了しました');
         } catch (err) {
-            toast('❌ 파일 삭제 실패: ' + err.message);
+            toast('❌ ファイル削除失敗: ' + err.message);
         }
     }
 
@@ -742,13 +742,13 @@
         input.value = '';
         if (!files.length) return;
         if (shelfUploadInProgress) {
-            toast('이미 업로드가 진행 중입니다.');
+            toast('すでにアップロード中です。');
             return;
         }
 
         if (files.length > MAX_SHELF_FILES) {
             files = files.slice(0, MAX_SHELF_FILES);
-            toast(`한 번에 최대 ${MAX_SHELF_FILES}개까지 업로드합니다. 앞의 ${MAX_SHELF_FILES}개만 처리합니다.`);
+            toast(`一度に最大 ${MAX_SHELF_FILES} 個までアップロードできます。先頭の ${MAX_SHELF_FILES} 個のみ処理します。`);
         }
 
         shelfUploadInProgress = true;
@@ -796,7 +796,7 @@
                     const chunks = Number(data.chunks_stored || 0);
                     if (chunks <= 0) {
                         failed += 1;
-                        failedReasons.push(`${file.name}: 텍스트 추출 실패`);
+                        failedReasons.push(`${file.name}: テキスト抽出失敗`);
                         completed += 1;
                         setShelfUploadProgress(completed, files.length, file.name);
                         continue;
@@ -842,15 +842,15 @@
 
             if (canceled) {
                 const canceledCount = Math.max(0, files.length - completed);
-                toast(`⏹ 업로드 중단: 저장 ${ok}개, 취소 ${canceledCount}개`);
+                toast(`⏹ アップロード中断: 保存 ${ok}件, キャンセル ${canceledCount}件`);
             } else if (ok > 0) {
-                toast(`✅ 업로드 완료: ${ok}개 파일`);
+                toast(`✅ アップロード完了: ${ok}個のファイル`);
             }
 
             if (failed > 0) {
                 const preview = failedReasons.slice(0, 2).join(' | ');
-                const suffix = failedReasons.length > 2 ? ` 외 ${failedReasons.length - 2}개` : '';
-                toast(`⚠️ 업로드 실패: ${failed}개 파일` + (preview ? ` (${preview}${suffix})` : ''));
+                const suffix = failedReasons.length > 2 ? ` ほか ${failedReasons.length - 2}件` : '';
+                toast(`⚠️ アップロード失敗: ${failed}個のファイル` + (preview ? ` (${preview}${suffix})` : ''));
                 console.warn('Upload failed details:', failedReasons);
             }
         } finally {
@@ -869,14 +869,14 @@
         isLoading = false;
         document.getElementById('send-btn').disabled = false;
         document.getElementById('stop-btn').style.display = 'none';
-        toast('⏹ 응답 중지됨');
+        toast('⏹ 応答を停止しました');
     }
 
     function isDocumentIntent(text) {
         const q = String(text || '').toLowerCase();
         const keywords = [
-            '문서', '파일', '첨부', '업로드', 'pdf', '페이지', '쪽', '본문', '원문',
-            '가사', '요약', '정리', '출처', '근거', '텍스트 추출', '텍스트만', '전문', '다 뽑',
+            '文書', 'ファイル', '添付', 'アップロード', 'pdf', 'ページ', '本文', '原文',
+            '歌詞', '要約', '整理', '出典', '根拠', 'テキスト抽出', 'テキストだけ', '全文', '文字抽出',
             'document', 'file', 'upload', 'pdf', 'page', 'source', 'quote', 'lyrics',
             'summarize', 'summary', 'extract', 'transcribe'
         ];
@@ -885,15 +885,15 @@
 
     function isDocumentFollowup(text) {
         const q = String(text || '').toLowerCase().trim();
-        const hints = ['그 부분', '위 내용', '방금', '그거', '거기', '다시', '이어', '계속'];
+        const hints = ['その部分', '上の内容', 'さっき', 'それ', 'そこ', 'もう一度', '続けて', '続き'];
         return q.length <= 20 && hints.some(k => q.includes(k));
     }
 
     function isGeneralChatOverride(text) {
         const q = String(text || '').toLowerCase();
         const keywords = [
-            '문서 말고', '파일 말고', '업로드 말고', '일반 대화', '새 주제', '주제 바꿔',
-            '그거 말고', '문서와 상관없이',
+            '文書じゃなくて', 'ファイルじゃなくて', 'アップロードとは関係なく', '普通に会話', '新しい話題', '話題を変えて',
+            'それじゃなくて', '文書と関係なく',
             'not about file', 'ignore file', 'new topic', 'general chat'
         ];
         return keywords.some(k => q.includes(k));
@@ -920,8 +920,8 @@
         const chat = ensureCurrentChat();
         if (!chat) return;
 
-        if (chat.title === '새 채팅') {
-            chat.title = text.length > 20 ? text.slice(0, 20) + '…' : text;
+        if (chat.title === '新しいチャット') {
+            chat.title = text.length > 28 ? text.slice(0, 28) + '…' : text;
             document.getElementById('hdr-title').textContent = chat.title;
             renderChatList();
         }
@@ -949,7 +949,7 @@
                 active_source: useUploadScope ? (chat.active_source || null) : null,
                 active_doc_id: useUploadScope ? (chat.active_doc_id || null) : null,
                 active_source_type: useUploadScope ? 'upload' : null,
-                web_search_enabled: true,
+                web_search_enabled: false,
                 user_id: currentUser ? currentUser.id : null
             };
 
@@ -969,10 +969,10 @@
                     detail = String(errPayload.detail || errPayload.message || '').trim();
                 } catch {}
                 const suffix = detail ? (' | ' + detail) : '';
-                renderMsg('삼육재단AI', '⚠️ 서버 오류가 발생했습니다.' + suffix, false, false, true);
+                renderMsg('Tilon AI', '⚠️ サーバーエラーが発生しました。' + suffix, false, false, true);
             } else {
                 const d = await res.json();
-                const answer = d.answer || d.reply || '응답이 비어 있습니다.';
+                const answer = d.answer || d.reply || '応答が空です。';
 
                 if (useUploadScope) {
                     chat.active_source = d.active_source || chat.active_source || null;
@@ -983,7 +983,7 @@
                 }
 
                 const hasScope = !!(chat.active_source || chat.active_doc_id);
-                const aMsg = { sender: '삼육재단AI', text: answer, isUser: false, hasScope };
+                const aMsg = { sender: 'Tilon AI', text: answer, isUser: false, hasScope };
                 chat.messages.push(aMsg);
                 saveChats();
                 renderMsg(aMsg.sender, aMsg.text, false, hasScope, true);
@@ -991,9 +991,9 @@
         } catch (err) {
             removeTyping(tid);
             if (err.name === 'AbortError') {
-                renderMsg('삼육재단AI', '⏹ 응답이 중지되었습니다.', false, false, true);
+                renderMsg('Tilon AI', '⏹ 応答が中断されました。', false, false, true);
             } else {
-                renderMsg('삼육재단AI', '⚠️ 서버에 연결할 수 없습니다.\n' + API + ' 확인하세요.', false, false, true);
+                renderMsg('Tilon AI', '⚠️ サーバーに接続できません。\n' + API + ' を確認してください。', false, false, true);
             }
         }
 
@@ -1012,7 +1012,7 @@
             <div class="msg-meta">
                 <span class="msg-sender ${isUser ? '' : 'ai'}">${isUser ? esc(sender) : esc(sender)}</span>
                 <span class="msg-time">${now()}</span>
-                <button class="copy-btn" onclick="copyMsg(this)">복사</button>
+                <button class="copy-btn" onclick="copyMsg(this)">コピー</button>
             </div>
             <div class="msg-text ${isUser ? 'user' : ''}">${esc(text)}</div>`;
         msgs.appendChild(g);
@@ -1023,7 +1023,7 @@
         const text = btn.closest('.msg-group').querySelector('.msg-text').innerText;
         navigator.clipboard.writeText(text).then(() => {
             btn.textContent = '✅';
-            setTimeout(() => btn.textContent = '복사', 1500);
+            setTimeout(() => btn.textContent = 'コピー', 1500);
         });
     }
 
@@ -1033,7 +1033,7 @@
         const el = document.createElement('div');
         el.id = id;
         el.className = 'typing';
-        el.innerHTML = `<span class="typing-label">삼육재단AI</span>
+        el.innerHTML = `<span class="typing-label">Tilon AI</span>
             <div class="dots"><span></span><span></span><span></span></div>`;
         msgs.appendChild(el);
         msgs.scrollTop = msgs.scrollHeight;

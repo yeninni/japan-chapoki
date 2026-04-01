@@ -38,6 +38,8 @@ REQUIRED_PACKAGES = {
 OPTIONAL_PACKAGES = {
     "FlagEmbedding": "FlagEmbedding (reranker)",
     "tavily": "tavily-python (web search)",
+    "paddleocr": "PaddleOCR",
+    "paddle": "Paddle runtime",
 }
 
 

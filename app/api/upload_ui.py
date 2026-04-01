@@ -426,7 +426,7 @@ function normalizeChatsShape(){
         if(!Array.isArray(chats[id].messages))chats[id].messages=[];
         if(typeof chats[id].activeSource!=='string')chats[id].activeSource='';
         if(typeof chats[id].activeDocId!=='string')chats[id].activeDocId='';
-        if(typeof chats[id].title!=='string')chats[id].title='New Chat';
+        if(typeof chats[id].title!=='string')chats[id].title='新しいチャット';
     }
 }
 
@@ -483,7 +483,7 @@ async function loadChatsFromServer(){
 
 function newChat(){
     currentChatId='chat_'+Date.now();
-    chats[currentChatId]={title:'New Chat',messages:[],activeSource:'',activeDocId:''};
+    chats[currentChatId]={title:'新しいチャット',messages:[],activeSource:'',activeDocId:''};
     saveChats();
     messagesEl.innerHTML='';
     renderActiveSource();
@@ -528,7 +528,7 @@ function renderHistory(){
 
 function updateChatTitle(text){
     if(!currentChatId||!chats[currentChatId])return;
-    if(chats[currentChatId].title==='New Chat'){
+    if(chats[currentChatId].title==='新しいチャット'){
         chats[currentChatId].title=text.slice(0,40)+(text.length>40?'...':'');
         saveChats();renderHistory();
     }
@@ -826,7 +826,7 @@ async function sendMessage(){
 
     const displayText=text||(files.length===1?'Analyze this document':`Analyze these ${files.length} documents`);
     const selectedModel=modelSelect.value;
-    const webSearchEnabled=!!(webSearchToggle&&webSearchToggle.checked);
+    const webSearchEnabled=false;
     const activeSource=chats[currentChatId].activeSource||'';
     const activeDocId=chats[currentChatId].activeDocId||'';
 
@@ -847,7 +847,7 @@ async function sendMessage(){
             fd.append('file',file);
             fd.append('message',displayText);
             fd.append('model',selectedModel);
-            fd.append('web_search_enabled',webSearchEnabled?'true':'false');
+            fd.append('web_search_enabled','false');
 
             const resp=await fetch('/chat-with-file',{method:'POST',body:fd});
             data=await readApiJson(resp);
@@ -917,7 +917,7 @@ async function sendMessage(){
                         model:selectedModel,
                         active_source:null,
                         active_doc_id:null,
-                        web_search_enabled:webSearchEnabled
+                        web_search_enabled:false
                     })
                 });
                 data=await readApiJson(resp);
@@ -951,7 +951,7 @@ async function sendMessage(){
                     model:selectedModel,
                     active_source:activeSource||null,
                     active_doc_id:activeDocId||null,
-                    web_search_enabled:webSearchEnabled
+                    web_search_enabled:false
                 })
             });
             data=await readApiJson(resp);
@@ -1048,7 +1048,7 @@ if(themeSelect){
 function initWebSearchToggle(){
     if(!webSearchToggle)return;
     const saved=localStorage.getItem('tilon_web_search_enabled');
-    const enabled=saved===null?true:saved==='true';
+    const enabled=saved===null?false:saved==='true';
     webSearchToggle.checked=enabled;
 }
 

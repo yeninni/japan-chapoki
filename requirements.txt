@@ -31,6 +31,9 @@ pdfplumber>=0.11.0
 Pillow>=10.0.0
 pytesseract>=0.3.10
 pdf2image>=1.16.0
+# PaddleOCR is optional here because Paddle wheels differ by CPU/GPU environment.
+# Install PaddleOCR + the matching Paddle runtime separately when you want it.
+# paddleocr>=2.8.1
 openai-whisper>=20250625
 
 # ── Language Detection (NEW) ──────────────────────────────────────────

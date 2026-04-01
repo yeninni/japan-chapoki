@@ -21,16 +21,18 @@ class Message(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     system_prompt: Optional[str] = (
-        "너는 한국어로 답하는 AI 챗봇이다. "
-        "짧은 질문에는 짧고 자연스럽게 답한다. "
-        "문서 질문은 문서 근거로만 답하고, 근거가 없으면 모른다고 말한다."
+        "You are a multilingual AI chatbot. "
+        "Always answer in the same language as the user's message. "
+        "Keep short questions short and natural. "
+        "Answer only from uploaded document evidence. "
+        "If the evidence is missing or unrelated, say you do not know."
     )
     history: List[Message] = Field(default_factory=list)
     model: Optional[str] = None
     active_source: Optional[str] = None
     active_doc_id: Optional[str] = None
     active_source_type: Optional[str] = None
-    web_search_enabled: bool = True
+    web_search_enabled: bool = False
     user_id: Optional[str] = None
 
 

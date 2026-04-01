@@ -129,8 +129,8 @@ The parser uses a multi-step extraction pipeline:
 3. `qwen2.5vl:7b`
    Vision fallback for scanned or image-heavy pages
 
-4. `tesseract`
-   OCR fallback
+4. `PaddleOCR` or `tesseract`
+   OCR fallback (`OCR_ENGINE=auto` prefers PaddleOCR when installed)
 
 Recent parser improvements:
 - per-page routing instead of whole-file routing

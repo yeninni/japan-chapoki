@@ -41,6 +41,18 @@ _KOREAN_SEPARATORS = [
     ". ", "? ", "! ", " ", "",
 ]
 
+_JAPANESE_SEPARATORS = [
+    "\n\n", "\n", "。\n", "。", "、\n", "、",
+    "！\n", "！", "？\n", "？", " ", "",
+]
+
+_GENERAL_SEPARATORS = [
+    "\n\n", "\n",
+    ". ", "? ", "! ",
+    "。", "、", "！", "？",
+    " ", "",
+]
+
 
 @dataclass
 class Section:
@@ -124,12 +136,23 @@ def _split_paragraphs(text: str, chunk_size: int) -> List[str]:
     return grouped
 
 
-def _char_split(text: str, chunk_size: int, chunk_overlap: int) -> List[str]:
-    """Fallback character-based split with Korean separators."""
+def _get_separators_for_language(lang: str) -> list:
+    """Get appropriate separators based on detected language."""
+    if lang == "ja":
+        return _JAPANESE_SEPARATORS
+    elif lang == "ko":
+        return _KOREAN_SEPARATORS
+    else:
+        return _GENERAL_SEPARATORS
+
+
+def _char_split(text: str, chunk_size: int, chunk_overlap: int, lang: str = "ko") -> List[str]:
+    """Fallback character-based split with language-specific separators."""
+    separators = _get_separators_for_language(lang)
     return RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
-        separators=_KOREAN_SEPARATORS,
+        separators=separators,
     ).split_text(text)
 
 
@@ -155,6 +178,7 @@ def _chunk_section(
     start_idx: int,
     chunk_size: int,
     chunk_overlap: int,
+    lang: str = "ko",
 ) -> List[Document]:
     """Chunk one section: tables → independent, text → whole or split."""
     chunks = []
@@ -165,7 +189,7 @@ def _chunk_section(
 
     # Table chunks
     for table in tables:
-        pieces = [table] if len(table) <= chunk_size else _char_split(table, chunk_size, chunk_overlap)
+        pieces = [table] if len(table) <= chunk_size else _char_split(table, chunk_size, chunk_overlap, lang)
         for piece in pieces:
             chunks.append(_make_chunk(
                 piece, base_meta, start_idx + len(chunks),
@@ -183,7 +207,7 @@ def _chunk_section(
         ))
     else:
         for para in _split_paragraphs(remaining, chunk_size):
-            pieces = [para] if len(para) <= chunk_size else _char_split(para, chunk_size, chunk_overlap)
+            pieces = [para] if len(para) <= chunk_size else _char_split(para, chunk_size, chunk_overlap, lang)
             for piece in pieces:
                 chunks.append(_make_chunk(
                     piece, base_meta, start_idx + len(chunks),
@@ -216,6 +240,7 @@ def chunk_documents(docs: List[Document]) -> List[Document]:
             )
         }
 
+        lang = base_meta.get("lang", "ko")  # Extract language from metadata, default to Korean
         chunk_size, chunk_overlap = _resolve_chunk_params(base_meta)
         if chunk_size != CHUNK_SIZE:
             fast_chunk_docs += 1
@@ -233,6 +258,7 @@ def chunk_documents(docs: List[Document]) -> List[Document]:
                         len(all_chunks),
                         chunk_size,
                         chunk_overlap,
+                        lang,
                     )
                 )
         else:
@@ -241,7 +267,7 @@ def chunk_documents(docs: List[Document]) -> List[Document]:
             section_title = base_meta.get("section_title", "")
 
             for table in tables:
-                pieces = [table] if len(table) <= chunk_size else _char_split(table, chunk_size, chunk_overlap)
+                pieces = [table] if len(table) <= chunk_size else _char_split(table, chunk_size, chunk_overlap, lang)
                 for piece in pieces:
                     all_chunks.append(_make_chunk(
                         piece, base_meta, len(all_chunks), section_title, "", "table",
@@ -254,7 +280,7 @@ def chunk_documents(docs: List[Document]) -> List[Document]:
                     ))
                 else:
                     for para in _split_paragraphs(remaining, chunk_size):
-                        pieces = [para] if len(para) <= chunk_size else _char_split(para, chunk_size, chunk_overlap)
+                        pieces = [para] if len(para) <= chunk_size else _char_split(para, chunk_size, chunk_overlap, lang)
                         for piece in pieces:
                             all_chunks.append(_make_chunk(
                                 piece, base_meta, len(all_chunks), section_title, "", "paragraph",

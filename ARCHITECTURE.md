@@ -144,8 +144,8 @@ The parser uses a layered approach:
 3. `qwen2.5vl`
    Vision fallback for scanned or image-heavy pages
 
-4. `tesseract`
-   OCR fallback
+4. `PaddleOCR` or `tesseract`
+   OCR fallback (`OCR_ENGINE=auto` prefers PaddleOCR when available)
 
 Recent improvements:
 - per-page routing

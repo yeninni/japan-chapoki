@@ -16,9 +16,9 @@ ModeType = Literal["general", "document_qa", "web_search", "ocr_extract"]
 
 # ── OCR: user wants raw text extraction ──
 OCR_KEYWORDS = [
-    "ocr", "텍스트만", "텍스트 추출", "원문", "글자 추출",
-    "읽어줘", "뽑아줘", "추출해줘", "문자 인식", "extract text",
-    "read the text", "show the text", "only text", "글자만",
+    "ocr", "テキストだけ", "テキスト抽出", "原文", "文字抽出",
+    "読んで", "読み取って", "抽出して", "文字認識", "extract text",
+    "read the text", "show the text", "only text", "文字だけ",
 ]
 
 # ── Document: user is asking about uploaded/stored documents ──

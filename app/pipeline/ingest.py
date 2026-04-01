@@ -21,7 +21,7 @@ from app.core.document_registry import infer_source_type, upsert_document
 from app.core.vectorstore import add_documents, get_ingested_sources
 from app.pipeline.chunker import chunk_documents
 from app.pipeline.enricher import enrich_chunks
-from app.pipeline.parser import parse_image, parse_pdf
+from app.pipeline.parser import parse_image, parse_pdf, detect_language
 
 logger = logging.getLogger("tilon.ingest")
 
@@ -78,6 +78,20 @@ def ingest_single_file(file_path: Path, owner_id: str = None) -> Dict[str, Any]:
     parse_seconds = time.perf_counter() - parse_started_at
 
     docs = _annotate_source_identity(docs, file_path, owner_id=owner_id)
+
+    # Detect language from the first document with sufficient content
+    detected_lang = "ko"  # Default to Korean
+    for doc in docs:
+        if len(doc.page_content) > 50:
+            detected_lang = detect_language(doc.page_content)
+            if detected_lang != "unknown":
+                break
+    
+    # Add language to all documents' metadata
+    for doc in docs:
+        doc.metadata["lang"] = detected_lang
+    
+    logger.info("Detected language: %s", detected_lang)
 
     if not docs:
         return {

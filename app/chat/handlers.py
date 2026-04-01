@@ -1,13 +1,10 @@
 """
-Unified chat handler — works like a normal chatbot.
+Unified chat handler for document-grounded chat.
 
-NO hardcoded mode routing. Instead:
-1. Always search vectorstore for relevant document context
-2. If web search might help, search Tavily too
-3. Build one prompt with all available context
-4. LLM decides what to use
-
-This is how ChatGPT/Claude work — retrieve first, let the model decide.
+Behavior:
+1. Always search the vectorstore for relevant document context
+2. Answer only from retrieved document evidence
+3. If the evidence is missing or unreliable, say you do not know
 """
 
 import logging
@@ -18,7 +15,6 @@ from typing import List, Dict, Any, Optional
 
 from app.models.schemas import Message
 from app.core.llm import call_ollama, get_response_text
-from app.core.web_search import format_search_results, search_web
 from app.retrieval.retriever import retrieve, format_context, extract_sources
 from app.core.vectorstore import get_documents_by_source, get_document_chunk_count
 from app.core.document_registry import list_documents
@@ -33,34 +29,9 @@ from app.config import (
 
 logger = logging.getLogger("tilon.chat")
 _HANGUL_RE = re.compile(r"[가-힣]")
+_JAPANESE_RE = re.compile(r"[\u3040-\u30ff\u31f0-\u31ff]")
 _CJK_HAN_RE = re.compile(r"[\u4e00-\u9fff]")
 _CJK_PUNCT_RE = re.compile(r"[，。！？；：、﹐﹒﹔﹕「」『』【】《》〈〉（）〔〕］［]")
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# Web Search (additive, not a separate mode)
-# ═══════════════════════════════════════════════════════════════════════
-
-def _search_web(query: str) -> str:
-    """Search current information using the shared search helper."""
-    try:
-        return format_search_results(search_web(query, max_results=3))
-    except Exception as e:
-        logger.debug("Web search failed: %s", e)
-        return ""
-
-
-def _might_need_web_search(text: str) -> bool:
-    """Light heuristic: does this query likely need real-time info?"""
-    indicators = [
-        "오늘", "현재", "최신", "최근", "실시간", "지금", "올해",
-        "날씨", "뉴스", "환율", "주가", "시세", "속보",
-        "today", "current", "latest", "recent", "now", "weather",
-        "news", "stock", "price", "score", "live",
-        "검색", "search", "look up", "find out",
-    ]
-    lower = text.lower()
-    return any(kw in lower for kw in indicators)
 
 
 def _needs_full_document_context(text: str) -> bool:
@@ -149,17 +120,19 @@ def _document_not_found_answer(
     active_source: Optional[str],
     active_doc_id: Optional[str] = None,
 ) -> str:
-    """Return a grounded fallback when scoped retrieval confidence is too low."""
-    source_name = active_source or active_doc_id or "the uploaded document"
-    if re.search(r"[가-힣]", user_message):
-        return (
-            f"업로드된 문서 '{source_name}'에서 질문과 관련된 정보를 찾지 못했습니다. "
-            "질문을 조금 더 구체적으로 해주세요."
-        )
-    return (
-        f"I couldn't find relevant information in the uploaded document '{source_name}'. "
-        "Please try a more specific question."
-    )
+    """Return a strict grounded fallback when the document lacks evidence."""
+    source_name = active_source or active_doc_id
+    if _HANGUL_RE.search(user_message):
+        if source_name:
+            return f"죄송합니다. 업로드된 문서 '{source_name}'에서 해당 내용을 찾지 못해 알 수 없습니다."
+        return "죄송합니다. 업로드된 PDF 문서에서 해당 내용을 찾지 못해 알 수 없습니다."
+    if _JAPANESE_RE.search(user_message):
+        if source_name:
+            return f"すみません。アップロードされた文書 '{source_name}' に該当する内容がないため、分かりません。"
+        return "すみません。アップロードされたPDFに該当する内容がないため、分かりません。"
+    if source_name:
+        return f"Sorry, I don't know because the uploaded document '{source_name}' does not contain that information."
+    return "Sorry, I don't know because the uploaded PDF does not contain that information."
 
 
 def _is_direct_extraction_query(text: str) -> bool:
@@ -168,6 +141,8 @@ def _is_direct_extraction_query(text: str) -> bool:
     indicators = [
         "텍스트 추출", "문자 추출", "글자 추출", "읽어줘", "텍스트만", "원문", "ocr",
         "모든 텍스트", "전체 텍스트", "텍스트 다", "다 뽑", "전문",
+        "テキスト抽出", "文字抽出", "文字だけ", "テキストだけ", "原文", "読んで",
+        "読み取って", "抽出して", "全文", "全部のテキスト", "画像の文字",
         "what does this image say", "what does the image say",
         "give me the text", "extract the text", "read the text",
         "read this image", "text in the image", "transcribe",
@@ -177,7 +152,7 @@ def _is_direct_extraction_query(text: str) -> bool:
 
 def _normalize_for_match(text: str) -> str:
     text = (text or "").lower()
-    text = re.sub(r"[^0-9a-z가-힣\s]", " ", text)
+    text = re.sub(r"[^0-9a-z가-힣\u3040-\u30ff\u31f0-\u31ff\u4e00-\u9fff\s]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
@@ -254,9 +229,14 @@ def _infer_upload_source_from_query_or_history(user_message: str, history: List[
     return None
 
 
-def _direct_extraction_ambiguous_answer(upload_sources: List[str]) -> str:
+def _direct_extraction_ambiguous_answer(upload_sources: List[str], user_message: str = "") -> str:
     preview = ", ".join(upload_sources[:3])
     suffix = f" 외 {len(upload_sources) - 3}개" if len(upload_sources) > 3 else ""
+    if _JAPANESE_RE.search(user_message):
+        return (
+            "アップロードされたファイルが複数あるため、どのファイルからテキストを抽出するか分かりません。"
+            f"ファイル名も一緒に指定してください。 (例: {preview}{suffix})"
+        )
     return (
         "업로드 파일이 여러 개라 어떤 파일에서 텍스트를 뽑아야 할지 애매합니다. "
         f"파일명을 같이 말해 주세요. (예: {preview}{suffix})"
@@ -292,7 +272,66 @@ def _strip_enrichment_header(text: str) -> str:
     return re.sub(r'^\[Document:.*?\]\n', '', text or '', flags=re.DOTALL).strip()
 
 
-def _build_direct_extraction_answer(active_source: Optional[str], docs) -> str:
+def _format_direct_extraction_text(user_message: str, extracted: str) -> str:
+    """Return raw extracted text with a localized label and no interpretation."""
+    if _HANGUL_RE.search(user_message):
+        return f"추출된 텍스트:\n\n{extracted}"
+    if _JAPANESE_RE.search(user_message):
+        return f"抽出されたテキスト:\n\n{extracted}"
+    if _HANGUL_RE.search(extracted):
+        return f"추출된 텍스트:\n\n{extracted}"
+    return f"Extracted text:\n\n{extracted}"
+
+
+def _document_read_failure_answer(user_message: str, active_source: Optional[str] = None) -> str:
+    """Return a localized refusal when OCR/text extraction looks unreliable."""
+    source_name = active_source or "the uploaded document"
+    if _JAPANESE_RE.search(user_message):
+        return (
+            f"すみません。'{source_name}' は正確に読み取れませんでした。"
+            "内容が分かりません。"
+        )
+    if _HANGUL_RE.search(user_message):
+        return (
+            f"죄송합니다. '{source_name}' 문서를 정확하게 읽지 못했습니다. "
+            "내용을 알 수 없습니다."
+        )
+    return (
+        f"Sorry, I couldn't read '{source_name}' accurately. "
+        "I don't know the content."
+    )
+
+
+def _looks_unreliable_extracted_text(text: str, user_message: str = "") -> bool:
+    """Heuristic: detect OCR text that is likely noise and should not be interpreted."""
+    sample = (text or "").strip()
+    if not sample:
+        return True
+
+    if _looks_garbled_output(sample):
+        return True
+
+    meaningful_chars = len(re.findall(r"[가-힣A-Za-z0-9\u3040-\u30ff\u31f0-\u31ff\u4e00-\u9fff]", sample))
+    if meaningful_chars < 12:
+        return True
+
+    latin_tokens = re.findall(r"\b[A-Za-z0-9]{4,}\b", sample)
+    uppercase_tokens = [tok for tok in latin_tokens if tok.upper() == tok and re.search(r"[A-Z]", tok)]
+    lowercase_count = len(re.findall(r"[a-z]", sample))
+    japanese_count = len(re.findall(r"[\u3040-\u30ff\u31f0-\u31ff\u4e00-\u9fff]", sample))
+
+    if latin_tokens and len(uppercase_tokens) >= 4 and len(uppercase_tokens) >= int(len(latin_tokens) * 0.7):
+        if lowercase_count == 0 and japanese_count == 0:
+            return True
+
+    if _JAPANESE_RE.search(user_message):
+        if japanese_count == 0 and len(uppercase_tokens) >= 3 and lowercase_count == 0:
+            return True
+
+    return False
+
+
+def _build_direct_extraction_answer(active_source: Optional[str], docs, user_message: str = "") -> str:
     """Return extracted document text directly for OCR/transcription requests."""
     extracted = "\n\n".join(
         _strip_enrichment_header(doc.page_content)
@@ -303,11 +342,13 @@ def _build_direct_extraction_answer(active_source: Optional[str], docs) -> str:
     if not extracted:
         fallback_source = active_source or (docs[0].metadata.get("source") if docs else None)
         fallback_doc_id = docs[0].metadata.get("doc_id") if docs else None
-        return _document_not_found_answer("extract text", fallback_source, fallback_doc_id)
+        return _document_not_found_answer(user_message or "extract text", fallback_source, fallback_doc_id)
 
-    if re.search(r"[가-힣]", extracted):
-        return f"추출된 텍스트:\n\n{extracted}"
-    return f"Extracted text:\n\n{extracted}"
+    if _looks_unreliable_extracted_text(extracted, user_message=user_message):
+        fallback_source = active_source or (docs[0].metadata.get("source") if docs else None)
+        return _document_read_failure_answer(user_message, fallback_source)
+
+    return _format_direct_extraction_text(user_message, extracted)
 
 
 def _scoped_confidence_threshold(docs) -> float:
@@ -358,26 +399,23 @@ def _format_history(history: List[Message], max_turns: int = 8) -> str:
     )
 
 
-_SYSTEM_PROMPT = """You are Tilon AI, a helpful document-based chatbot.
+_SYSTEM_PROMPT = """You are Tilon AI, a strict document-based chatbot.
 
 CRITICAL RULES:
 1. Respond in the SAME language the user is using. Korean → Korean. English → English. NEVER output Chinese characters (中文/汉字).
-2. If document context is provided and relevant to the question, answer based on that context and cite the source (document name, page number).
-3. If document context is provided but NOT relevant to the question, ignore it and answer normally.
-4. If no document context is available, answer from your general knowledge.
-5. If web search results are provided, use them for current/real-time information.
-6. If you don't know, say so honestly. Never make up information.
-7. Be concise and direct. Answer the question first, then explain if needed.
-8. When citing documents, mention the source naturally (e.g., "문서 3페이지에 따르면..." or "According to page 3...").
-9. If retrieved text includes Chinese characters, translate/paraphrase them into Korean or the user's language instead of copying Chinese characters.
-10. Do NOT use markdown emphasis symbols in the final answer (forbidden: **, __). Output plain text only."""
+2. Answer ONLY from the retrieved document context. Do not use general knowledge, prior assumptions, or web knowledge.
+3. If the retrieved document context is missing, weak, unrelated, or insufficient, say you do not know.
+4. Never guess, summarize from memory, or fill gaps with plausible information.
+5. When document evidence is available, cite the source naturally (document name, page number).
+6. Be concise and direct. Answer the question first, then explain if needed.
+7. If retrieved text includes Chinese characters, translate/paraphrase them into the user's language instead of copying Chinese characters.
+8. Do NOT use markdown emphasis symbols in the final answer (forbidden: **, __). Output plain text only."""
 
 
 def _build_prompt(
     user_message: str,
     history: List[Message],
     doc_context: str = "",
-    web_context: str = "",
     system_prompt: str = "",
 ) -> str:
     """Build a single unified prompt with all available context."""
@@ -389,9 +427,6 @@ def _build_prompt(
 
     if doc_context:
         parts.append(f"[Retrieved document context]\n{doc_context}")
-
-    if web_context:
-        parts.append(f"[Web search results]\n{web_context}")
 
     parts.append(f"[User message]\n{user_message}")
 
@@ -428,10 +463,6 @@ def _looks_garbled_output(answer: str) -> bool:
     if not text:
         return False
 
-    cjk_punct_count = len(_CJK_PUNCT_RE.findall(text))
-    if cjk_punct_count >= 3:
-        return True
-
     if re.search(r"[，。！？；：]\s*[，。！？；：]", text):
         return True
 
@@ -439,7 +470,7 @@ def _looks_garbled_output(answer: str) -> bool:
     noisy_lines = 0
     for ln in lines:
         # Lines with mostly punctuation and almost no meaningful letters/numbers.
-        meaningful = len(re.findall(r"[가-힣A-Za-z0-9]", ln))
+        meaningful = len(re.findall(r"[가-힣A-Za-z0-9\u3040-\u30ff\u31f0-\u31ff\u4e00-\u9fff]", ln))
         has_cjk_punct = bool(_CJK_PUNCT_RE.search(ln))
         if has_cjk_punct and meaningful <= 1:
             noisy_lines += 1
@@ -466,6 +497,20 @@ def _expects_korean_output(user_message: str) -> bool:
     return bool(_HANGUL_RE.search(user_message or ""))
 
 
+def _expects_japanese_output(user_message: str) -> bool:
+    """Treat messages containing kana as Japanese-mode conversations."""
+    return bool(_JAPANESE_RE.search(user_message or ""))
+
+
+def _expected_output_language(user_message: str) -> str:
+    """Infer the primary response language from the user message."""
+    if _expects_korean_output(user_message):
+        return "ko"
+    if _expects_japanese_output(user_message):
+        return "ja"
+    return "other"
+
+
 def _needs_language_rewrite(user_message: str, answer: str) -> bool:
     """
     Rewrite when:
@@ -476,30 +521,43 @@ def _needs_language_rewrite(user_message: str, answer: str) -> bool:
     if not answer:
         return False
 
-    if _contains_chinese_chars(answer) or _contains_cjk_punctuation(answer):
+    expected_lang = _expected_output_language(user_message)
+
+    if (expected_lang != "ja" and _contains_chinese_chars(answer)) or (
+        expected_lang != "ja" and _contains_cjk_punctuation(answer)
+    ):
         return True
 
     if _looks_garbled_output(answer):
         return True
 
-    if _expects_korean_output(user_message):
+    if expected_lang == "ko":
         hangul_count = len(_HANGUL_RE.findall(answer))
         latin_count = len(re.findall(r"[A-Za-z]", answer))
         # If there is no Hangul and enough Latin text, force Korean rewrite.
         if hangul_count == 0 and latin_count >= 5:
             return True
+    elif expected_lang == "ja":
+        if _HANGUL_RE.search(answer):
+            return True
+        kana_count = len(_JAPANESE_RE.findall(answer))
+        latin_count = len(re.findall(r"[A-Za-z]", answer))
+        han_count = len(_CJK_HAN_RE.findall(answer))
+        if kana_count == 0 and han_count == 0 and latin_count >= 5:
+            return True
 
     return False
 
 
-def _rewrite_answer_to_korean(answer: str, user_message: str, model: str) -> str:
+def _rewrite_answer_to_user_language(answer: str, user_message: str, model: str) -> str:
     """One-shot rewrite pass to remove Chinese and align language with the user."""
     rewrite_prompt = f"""[System]
 You are a strict editor.
 Respond in the SAME language as the user message.
 If user message is Korean, output must include natural Korean sentences (Hangul).
+If user message is Japanese, output must include natural Japanese sentences.
 ABSOLUTE RULE: Do not output Chinese characters (中文/汉字) at all.
-If Chinese text exists in the draft, translate/paraphrase it into Korean or the user language.
+If Chinese text exists in the draft, translate/paraphrase it into the user language.
 Preserve facts, order, and citations from the draft answer.
 Do not add new claims.
 
@@ -521,10 +579,10 @@ Rewrite the draft to match the user language and remove Chinese characters.
     return get_response_text(rewritten)
 
 
-def _translate_to_korean_fallback(answer: str, model: str) -> str:
-    """Last-resort translation to Korean when Korean mode is required."""
+def _translate_to_target_language_fallback(answer: str, model: str, target_language: str) -> str:
+    """Last-resort translation into the user's language."""
     prompt = f"""[System]
-Translate the draft answer into natural Korean.
+Translate the draft answer into natural {target_language}.
 Do not output Chinese characters (中文/汉字).
 Preserve meaning and important details.
 
@@ -539,9 +597,11 @@ def _apply_language_guard(user_message: str, answer: str, model: str) -> str:
     """
     Hard guard:
     - Never allow Chinese characters.
-    - Korean user message -> enforce Korean output.
+    - Enforce the user's language when it is clearly detectable.
     """
-    expect_korean = _expects_korean_output(user_message)
+    expected_lang = _expected_output_language(user_message)
+    expect_korean = expected_lang == "ko"
+    expect_japanese = expected_lang == "ja"
 
     if not _needs_language_rewrite(user_message, answer):
         return answer
@@ -549,44 +609,55 @@ def _apply_language_guard(user_message: str, answer: str, model: str) -> str:
     candidate = answer
     try:
         for _ in range(3):
-            rewritten = _rewrite_answer_to_korean(candidate, user_message, model)
+            rewritten = _rewrite_answer_to_user_language(candidate, user_message, model)
             if not rewritten:
                 break
             candidate = rewritten
 
-            no_chinese = not _contains_chinese_chars(candidate)
-            no_cjk_punct = not _contains_cjk_punctuation(candidate)
+            no_chinese = expect_japanese or not _contains_chinese_chars(candidate)
+            no_cjk_punct = expect_japanese or not _contains_cjk_punctuation(candidate)
             has_korean = bool(_HANGUL_RE.search(candidate))
+            has_japanese = bool(_JAPANESE_RE.search(candidate))
             not_garbled = not _looks_garbled_output(candidate)
-            if no_chinese and no_cjk_punct and not_garbled and (not expect_korean or has_korean):
+            if (
+                no_chinese
+                and no_cjk_punct
+                and not_garbled
+                and (not expect_korean or has_korean)
+                and (not expect_japanese or has_japanese)
+            ):
                 logger.info("Applied strict language guard.")
                 return _strip_markdown_emphasis(candidate).strip()
     except Exception as e:
         logger.warning("Strict language guard rewrite failed: %s", e)
 
     # Remove any remaining Chinese chars first and normalize punctuation noise.
-    stripped = _CJK_HAN_RE.sub("", candidate or "")
-    stripped = _normalize_cjk_punctuation(stripped)
+    stripped = candidate or ""
+    if not expect_japanese:
+        stripped = _CJK_HAN_RE.sub("", stripped)
+    if not expect_japanese:
+        stripped = _normalize_cjk_punctuation(stripped)
     stripped = re.sub(r"[ 	]{2,}", " ", stripped)
     stripped = re.sub(r"\n{3,}", "\n\n", stripped).strip()
 
     # If still garbled, ask for one more clean rewrite in user language.
     if _looks_garbled_output(stripped):
         try:
-            cleaned = _rewrite_answer_to_korean(stripped, user_message, model)
+            cleaned = _rewrite_answer_to_user_language(stripped, user_message, model)
             if cleaned:
-                cleaned = _normalize_cjk_punctuation(cleaned)
+                if not expect_japanese:
+                    cleaned = _normalize_cjk_punctuation(cleaned)
                 cleaned = _strip_markdown_emphasis(cleaned).strip()
-                if cleaned and not _contains_chinese_chars(cleaned) and not _looks_garbled_output(cleaned):
+                if cleaned and (expect_japanese or not _contains_chinese_chars(cleaned)) and not _looks_garbled_output(cleaned):
                     logger.warning("Applied garbled-output cleanup rewrite in language guard.")
                     return cleaned
         except Exception as e:
             logger.warning("Garbled-output cleanup rewrite failed: %s", e)
 
-    # If Korean is expected but still absent, force one translation pass.
+    # If user language is expected but still absent, force one translation pass.
     if expect_korean and not _HANGUL_RE.search(stripped):
         try:
-            translated = _translate_to_korean_fallback(stripped or candidate, model)
+            translated = _translate_to_target_language_fallback(stripped or candidate, model, "Korean")
             if translated:
                 translated = _normalize_cjk_punctuation(translated)
             if translated and _HANGUL_RE.search(translated) and not _contains_chinese_chars(translated):
@@ -599,10 +670,25 @@ def _apply_language_guard(user_message: str, answer: str, model: str) -> str:
 
         return "한국어로 답변하도록 재시도했지만 변환에 실패했습니다. 같은 질문을 다시 입력해 주세요."
 
+    if expect_japanese and not _JAPANESE_RE.search(stripped):
+        try:
+            translated = _translate_to_target_language_fallback(stripped or candidate, model, "Japanese")
+            if translated and _JAPANESE_RE.search(translated):
+                translated = _strip_markdown_emphasis(translated).strip()
+                if not _looks_garbled_output(translated):
+                    logger.warning("Applied Japanese fallback translation in language guard.")
+                    return translated
+        except Exception as e:
+            logger.warning("Japanese fallback translation failed: %s", e)
+
+        return "日本語で回答するよう再試行しましたが、変換に失敗しました。もう一度同じ質問をしてください。"
+
     if stripped:
         logger.warning("Applied hard-strip fallback in language guard.")
         return stripped
 
+    if expect_japanese:
+        return "言語ポリシーに合う応答を生成できませんでした。同じ質問をもう一度試してください。"
     return "언어 정책에 맞는 응답 생성에 실패했습니다. 같은 질문을 다시 시도해 주세요."
 
 
@@ -689,7 +775,7 @@ def handle_chat(
     active_doc_id: str = None,
     active_source_type: str = None,
     system_prompt: str = None,
-    web_search_enabled: bool = True,
+    web_search_enabled: bool = False,
     user_id: str = None,
 ) -> Dict[str, Any]:
     """
@@ -703,7 +789,7 @@ def handle_chat(
         active_doc_id: Stable document ID scope for the current chat, if any
         active_source_type: Source-type scope for the current chat (e.g., 'upload'), if any
         system_prompt: Override default system prompt
-        web_search_enabled: Enable/disable Tavily web search
+        web_search_enabled: Reserved for backward compatibility; web search is disabled
     """
     history = history or []
     selected_model = model or OLLAMA_MODEL
@@ -738,7 +824,7 @@ def handle_chat(
     if _is_direct_extraction_query(user_message) and not (scoped_source or scoped_doc_id) and scoped_source_type == "upload":
         upload_sources = _list_uploaded_sources(owner_id=user_id)
         return {
-            "answer": _direct_extraction_ambiguous_answer(upload_sources),
+            "answer": _direct_extraction_ambiguous_answer(upload_sources, user_message=user_message),
             "sources": [],
             "mode": "ocr_extract",
             "active_source": active_source,
@@ -756,15 +842,10 @@ def handle_chat(
 
             fresh_text = _extract_text_from_upload_source(scoped_source, user_id=user_id, source_path=(docs[0].metadata.get("source_path") if docs else None))
             if fresh_text:
-                if re.search(r"[가-힣]", fresh_text):
-                    extraction_answer = f"추출된 텍스트:\n\n{fresh_text}"
-                else:
-                    extraction_answer = f"Extracted text:\n\n{fresh_text}"
+                extraction_answer = _format_direct_extraction_text(user_message, fresh_text)
             else:
-                extraction_answer = _build_direct_extraction_answer(scoped_source, docs)
+                extraction_answer = _build_direct_extraction_answer(scoped_source, docs, user_message=user_message)
 
-            extraction_answer = _apply_language_guard(user_message, extraction_answer, selected_model)
-            extraction_answer = _strip_markdown_emphasis(extraction_answer)
             return {
                 "answer": extraction_answer,
                 "sources": extract_sources(docs),
@@ -828,15 +909,59 @@ def handle_chat(
                     "active_doc_id": active_doc_id,
                 }
 
-            # Source-type-only scope (e.g. all uploads) should stay flexible.
-            # Do not hard-stop here; allow history-aware/general continuation.
+            return {
+                "answer": _document_not_found_answer(
+                    user_message,
+                    active_source or ("uploaded PDFs" if active_source_type == "upload" else None),
+                    active_doc_id,
+                ),
+                "sources": [],
+                "mode": "document_qa",
+                "active_source": active_source,
+                "active_doc_id": active_doc_id,
+            }
+
+    if docs and not has_any_scope and not use_full_document:
+        low_confidence = (
+            retrieval.confidence < DOCUMENT_CONFIDENCE_THRESHOLD
+            and not retrieval.strong_keyword_hit
+        )
+        if low_confidence:
             logger.info(
-                "Low-confidence upload-scoped retrieval; continuing with history-aware general response path."
+                "Low-confidence unscoped retrieval (confidence=%.2f, threshold=%.2f, keyword_hit=%s)",
+                retrieval.confidence,
+                DOCUMENT_CONFIDENCE_THRESHOLD,
+                retrieval.strong_keyword_hit,
             )
+            return {
+                "answer": _document_not_found_answer(user_message, None, None),
+                "sources": [],
+                "mode": "document_qa",
+                "active_source": active_source,
+                "active_doc_id": active_doc_id,
+            }
 
     if docs:
         doc_context = format_context(docs)
         sources = extract_sources(docs)
+
+        combined_scoped_text = "\n\n".join(
+            _strip_enrichment_header(doc.page_content)
+            for doc in docs
+            if _strip_enrichment_header(doc.page_content)
+        ).strip()
+        if has_any_scope and combined_scoped_text and _looks_unreliable_extracted_text(combined_scoped_text, user_message=user_message):
+            return {
+                "answer": _document_read_failure_answer(
+                    user_message,
+                    scoped_source or active_source or active_doc_id,
+                ),
+                "sources": sources,
+                "mode": "document_qa",
+                "active_source": active_source,
+                "active_doc_id": active_doc_id,
+            }
+
         if use_full_document:
             logger.info(
                 "Loaded full document context: %d chunks from '%s'",
@@ -865,29 +990,23 @@ def handle_chat(
             )
     else:
         logger.info("No relevant document chunks found")
+        return {
+            "answer": _document_not_found_answer(
+                user_message,
+                scoped_source or active_source or ("uploaded PDFs" if scoped_source_type == "upload" else None),
+                scoped_doc_id or active_doc_id,
+            ),
+            "sources": [],
+            "mode": "document_qa",
+            "active_source": active_source,
+            "active_doc_id": active_doc_id,
+        }
 
-    # ── Step 2: Optional web search (toggle-controlled) ──
-    web_context = ""
-    allow_web_search = web_search_enabled and not (scoped_source or scoped_doc_id)
-    if scoped_source_type and _is_document_intent_query(user_message):
-        allow_web_search = False
-
-    if allow_web_search:
-        if _might_need_web_search(user_message):
-            web_results = _search_web(user_message)
-            if web_results:
-                web_context = web_results
-                logger.info("Added web search results (toggle enabled)")
-            else:
-                logger.info("Web search requested but no results were returned.")
-        else:
-            logger.debug("Web search skipped by heuristic (query appears local/static).")
-    # ── Step 3: Build prompt with all context and let LLM decide ──
+    # ── Step 2: Build prompt with retrieved document evidence only ──
     prompt = _build_prompt(
         user_message=user_message,
         history=history,
         doc_context=doc_context,
-        web_context=web_context,
         system_prompt=system_prompt,
     )
 
@@ -898,11 +1017,7 @@ def handle_chat(
     answer = _strip_markdown_emphasis(answer)
 
     # Determine what was used (for UI display)
-    mode = "general"
-    if doc_context and sources:
-        mode = "document_qa"
-    if web_context:
-        mode = "web_search" if not doc_context else "document_qa+web"
+    mode = "document_qa"
 
     resolved_active_source = None
     resolved_active_doc_id = None
