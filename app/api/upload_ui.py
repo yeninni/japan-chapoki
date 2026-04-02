@@ -1,16 +1,20 @@
 """
-Chat UI with model selector and chat history.
-Access at: http://localhost:8000/ui
+Browser UI routes.
+
+- /login renders the login page
+- /{user_id} renders the user-scoped chat app
+- /ui redirects to /login for backward compatibility
 """
 
 import logging
 from pathlib import Path
 from fastapi import APIRouter
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 logger = logging.getLogger("tilon.ui")
 router = APIRouter(tags=["Chat UI"])
 UI_INDEX_PATH = Path(__file__).resolve().parents[2] / "static" / "index.html"
+LOGIN_INDEX_PATH = Path(__file__).resolve().parents[2] / "static" / "login.html"
 
 CHAT_UI_HTML = """
 <!DOCTYPE html>
@@ -1139,8 +1143,21 @@ chatInput.focus();
 </html>
 """
 
-@router.get("/ui", response_class=HTMLResponse)
-def chat_ui():
+@router.get("/login", response_class=HTMLResponse)
+def login_ui():
+    if LOGIN_INDEX_PATH.exists():
+        return FileResponse(LOGIN_INDEX_PATH)
+    logger.warning("static login UI not found at %s", LOGIN_INDEX_PATH)
+    return HTMLResponse("<h1>Login UI not found.</h1>", status_code=500)
+
+
+@router.get("/ui")
+def legacy_ui_redirect():
+    return RedirectResponse(url="/login", status_code=307)
+
+
+@router.get("/{user_id}", response_class=HTMLResponse)
+def chat_ui(user_id: str):
     if UI_INDEX_PATH.exists():
         return FileResponse(UI_INDEX_PATH)
     logger.warning("static UI not found at %s, serving embedded fallback UI", UI_INDEX_PATH)
