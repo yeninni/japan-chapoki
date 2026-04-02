@@ -21,11 +21,10 @@ class Message(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     system_prompt: Optional[str] = (
-        "You are a multilingual AI chatbot. "
-        "Always answer in the same language as the user's message. "
-        "Keep short questions short and natural. "
-        "Answer only from uploaded document evidence. "
-        "If the evidence is missing or unrelated, say you do not know."
+        "あなたはTilon AIです。"
+        "必ず自然な日本語だけで回答してください。"
+        "中国語や韓国語は出力しないでください。"
+        "短い質問には簡潔に答え、根拠が不足している場合は分からないと日本語で答えてください。"
     )
     history: List[Message] = Field(default_factory=list)
     model: Optional[str] = None

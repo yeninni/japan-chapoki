@@ -32,6 +32,9 @@ _HANGUL_RE = re.compile(r"[가-힣]")
 _JAPANESE_RE = re.compile(r"[\u3040-\u30ff\u31f0-\u31ff]")
 _CJK_HAN_RE = re.compile(r"[\u4e00-\u9fff]")
 _CJK_PUNCT_RE = re.compile(r"[，。！？；：、﹐﹒﹔﹕「」『』【】《》〈〉（）〔〕］［]")
+_SIMPLIFIED_CHINESE_RE = re.compile(
+    r"(这是|请用|无法|没有)|[这们为说开点实观见将让还吗应没]"
+)
 _SCOPED_FULL_CONTEXT_RETRY_MAX_CHUNKS = 12
 
 
@@ -123,17 +126,9 @@ def _document_not_found_answer(
 ) -> str:
     """Return a strict grounded fallback when the document lacks evidence."""
     source_name = active_source or active_doc_id
-    if _HANGUL_RE.search(user_message):
-        if source_name:
-            return f"죄송합니다. 업로드된 문서 '{source_name}'에서 해당 내용을 찾지 못해 알 수 없습니다."
-        return "죄송합니다. 업로드된 PDF 문서에서 해당 내용을 찾지 못해 알 수 없습니다."
-    if _JAPANESE_RE.search(user_message):
-        if source_name:
-            return f"すみません。アップロードされた文書 '{source_name}' に該当する内容がないため、分かりません。"
-        return "すみません。アップロードされたPDFに該当する内容がないため、分かりません。"
     if source_name:
-        return f"Sorry, I don't know because the uploaded document '{source_name}' does not contain that information."
-    return "Sorry, I don't know because the uploaded PDF does not contain that information."
+        return f"すみません。アップロードされた文書 '{source_name}' に該当する内容がないため、分かりません。"
+    return "すみません。アップロードされたPDFに該当する内容がないため、分かりません。"
 
 
 def _is_direct_extraction_query(text: str) -> bool:
@@ -273,15 +268,10 @@ def _infer_upload_source_from_query_or_history(user_message: str, history: List[
 
 def _direct_extraction_ambiguous_answer(upload_sources: List[str], user_message: str = "") -> str:
     preview = ", ".join(upload_sources[:3])
-    suffix = f" 외 {len(upload_sources) - 3}개" if len(upload_sources) > 3 else ""
-    if _JAPANESE_RE.search(user_message):
-        return (
-            "アップロードされたファイルが複数あるため、どのファイルからテキストを抽出するか分かりません。"
-            f"ファイル名も一緒に指定してください。 (例: {preview}{suffix})"
-        )
+    suffix = f" ほか{len(upload_sources) - 3}件" if len(upload_sources) > 3 else ""
     return (
-        "업로드 파일이 여러 개라 어떤 파일에서 텍스트를 뽑아야 할지 애매합니다. "
-        f"파일명을 같이 말해 주세요. (예: {preview}{suffix})"
+        "アップロードされたファイルが複数あるため、どのファイルからテキストを抽出するか分かりません。"
+        f"ファイル名も一緒に指定してください。 (例: {preview}{suffix})"
     )
 
 
@@ -333,31 +323,15 @@ def _docs_have_machine_readable_text(docs) -> bool:
 
 def _format_direct_extraction_text(user_message: str, extracted: str) -> str:
     """Return raw extracted text with a localized label and no interpretation."""
-    if _HANGUL_RE.search(user_message):
-        return f"추출된 텍스트:\n\n{extracted}"
-    if _JAPANESE_RE.search(user_message):
-        return f"抽出されたテキスト:\n\n{extracted}"
-    if _HANGUL_RE.search(extracted):
-        return f"추출된 텍스트:\n\n{extracted}"
-    return f"Extracted text:\n\n{extracted}"
+    return f"抽出されたテキスト:\n\n{extracted}"
 
 
 def _document_read_failure_answer(user_message: str, active_source: Optional[str] = None) -> str:
     """Return a localized refusal when OCR/text extraction looks unreliable."""
-    source_name = active_source or "the uploaded document"
-    if _JAPANESE_RE.search(user_message):
-        return (
-            f"すみません。'{source_name}' は正確に読み取れませんでした。"
-            "内容が分かりません。"
-        )
-    if _HANGUL_RE.search(user_message):
-        return (
-            f"죄송합니다. '{source_name}' 문서를 정확하게 읽지 못했습니다. "
-            "내용을 알 수 없습니다."
-        )
+    source_name = active_source or "アップロードされた文書"
     return (
-        f"Sorry, I couldn't read '{source_name}' accurately. "
-        "I don't know the content."
+        f"すみません。'{source_name}' は正確に読み取れませんでした。"
+        "内容が分かりません。"
     )
 
 
@@ -521,14 +495,15 @@ def _format_history(history: List[Message], max_turns: int = 8) -> str:
 _SYSTEM_PROMPT = """You are Tilon AI, a strict document-based chatbot.
 
 CRITICAL RULES:
-1. Respond in the SAME language the user is using. Korean → Korean. English → English. NEVER output Chinese characters (中文/汉字).
-2. Answer ONLY from the retrieved document context. Do not use general knowledge, prior assumptions, or web knowledge.
-3. If the retrieved document context is missing, weak, unrelated, or insufficient, say you do not know.
-4. Never guess, summarize from memory, or fill gaps with plausible information.
-5. When document evidence is available, cite the source naturally (document name, page number).
-6. Be concise and direct. Answer the question first, then explain if needed.
-7. If retrieved text includes Chinese characters, translate/paraphrase them into the user's language instead of copying Chinese characters.
-8. Do NOT use markdown emphasis symbols in the final answer (forbidden: **, __). Output plain text only."""
+1. Respond ONLY in natural Japanese.
+2. Never output Korean.
+3. Never output Chinese text or Chinese-only phrasing. Japanese kanji are allowed only as part of natural Japanese sentences.
+4. Answer ONLY from the retrieved document context. Do not use general knowledge, prior assumptions, or web knowledge.
+5. If the retrieved document context is missing, weak, unrelated, or insufficient, say you do not know in Japanese.
+6. Never guess, summarize from memory, or fill gaps with plausible information.
+7. When document evidence is available, cite the source naturally in Japanese (document name, page number).
+8. Keep paragraphs clean. Do not produce broken line fragments or punctuation-only lines.
+9. Do NOT use markdown emphasis symbols in the final answer (forbidden: **, __). Output plain text only."""
 
 
 def _build_prompt(
@@ -538,7 +513,14 @@ def _build_prompt(
     system_prompt: str = "",
 ) -> str:
     """Build a single unified prompt with all available context."""
-    parts = [f"[System]\n{system_prompt or _SYSTEM_PROMPT}"]
+    parts = [f"[System]\n{_SYSTEM_PROMPT}"]
+
+    extra_system_prompt = (system_prompt or "").strip()
+    if extra_system_prompt:
+        parts.append(
+            "[Additional user preferences - lower priority than System rules]\n"
+            + extra_system_prompt
+        )
 
     history_text = _format_history(history)
     if history_text:
@@ -601,6 +583,50 @@ def _looks_garbled_output(answer: str) -> bool:
     return noisy_lines >= 2
 
 
+def _merge_wrapped_lines(previous: str, current: str) -> str:
+    """Join accidental soft-wraps without damaging Japanese text."""
+    if not previous:
+        return current
+    if re.search(r"[A-Za-z0-9]$", previous) and re.search(r"^[A-Za-z0-9]", current):
+        return previous + " " + current
+    return previous + current
+
+
+def _normalize_answer_layout(text: str) -> str:
+    """Collapse broken line-wraps and punctuation-only fragments."""
+    if not text:
+        return text
+
+    raw_lines = [
+        re.sub(r"[ \t]+", " ", line).strip()
+        for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    ]
+
+    normalized: List[str] = []
+    for line in raw_lines:
+        if not line:
+            if normalized and normalized[-1] != "":
+                normalized.append("")
+            continue
+
+        if re.fullmatch(r"[，。、！？；：,.;:!?・\-•\s]+", line):
+            continue
+
+        if not normalized or normalized[-1] == "" or re.match(r"^([\-*•]|[0-9]+[.)]|[・■□])\s+", line):
+            normalized.append(line)
+            continue
+
+        if re.search(r"[。．.!?！？]$", normalized[-1]):
+            normalized.append(line)
+            continue
+
+        normalized[-1] = _merge_wrapped_lines(normalized[-1], line)
+
+    cleaned = "\n".join(normalized).strip()
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned
+
+
 def _strip_markdown_emphasis(text: str) -> str:
     """Remove markdown emphasis/heading markers from model output."""
     if not text:
@@ -622,12 +648,59 @@ def _expects_japanese_output(user_message: str) -> bool:
 
 
 def _expected_output_language(user_message: str) -> str:
-    """Infer the primary response language from the user message."""
-    if _expects_korean_output(user_message):
-        return "ko"
-    if _expects_japanese_output(user_message):
-        return "ja"
-    return "other"
+    """This app is locked to Japanese output."""
+    return "ja"
+
+
+def _looks_non_japanese_cjk_output(text: str) -> bool:
+    """Detect CJK-heavy output that does not read like natural Japanese."""
+    sample = _normalize_answer_layout(text or "")
+    meaningful = len(re.findall(r"[A-Za-z0-9가-힣\u3040-\u30ff\u31f0-\u31ff\u4e00-\u9fff]", sample))
+    kana_count = len(_JAPANESE_RE.findall(sample))
+    han_count = len(_CJK_HAN_RE.findall(sample))
+    hangul_count = len(_HANGUL_RE.findall(sample))
+    latin_count = len(re.findall(r"[A-Za-z]", sample))
+
+    if hangul_count > 0:
+        return True
+
+    if _SIMPLIFIED_CHINESE_RE.search(sample):
+        return True
+
+    if meaningful >= 8 and han_count >= 3 and kana_count == 0:
+        return True
+
+    if meaningful >= 16 and han_count >= 6 and kana_count < max(2, han_count // 8):
+        return True
+
+    if meaningful >= 16 and kana_count == 0 and latin_count >= 6:
+        return True
+
+    return False
+
+
+def _is_acceptable_japanese_output(text: str) -> bool:
+    """Require readable Japanese with kana present in non-trivial answers."""
+    sample = _normalize_answer_layout(_strip_markdown_emphasis(text or ""))
+    if not sample:
+        return False
+    if _SIMPLIFIED_CHINESE_RE.search(sample):
+        return False
+    if _looks_garbled_output(sample):
+        return False
+    if _looks_non_japanese_cjk_output(sample):
+        return False
+
+    meaningful = len(re.findall(r"[A-Za-z0-9\u3040-\u30ff\u31f0-\u31ff\u4e00-\u9fff]", sample))
+    kana_count = len(_JAPANESE_RE.findall(sample))
+    han_count = len(_CJK_HAN_RE.findall(sample))
+
+    if meaningful >= 14 and kana_count == 0:
+        return False
+    if meaningful >= 18 and han_count >= 8 and kana_count < 2:
+        return False
+
+    return True
 
 
 def _needs_language_rewrite(user_message: str, answer: str) -> bool:
@@ -642,41 +715,31 @@ def _needs_language_rewrite(user_message: str, answer: str) -> bool:
 
     expected_lang = _expected_output_language(user_message)
 
-    if (expected_lang != "ja" and _contains_chinese_chars(answer)) or (
-        expected_lang != "ja" and _contains_cjk_punctuation(answer)
-    ):
-        return True
-
     if _looks_garbled_output(answer):
         return True
 
-    if expected_lang == "ko":
-        hangul_count = len(_HANGUL_RE.findall(answer))
-        latin_count = len(re.findall(r"[A-Za-z]", answer))
-        # If there is no Hangul and enough Latin text, force Korean rewrite.
-        if hangul_count == 0 and latin_count >= 5:
+    if expected_lang == "ja":
+        if _contains_chinese_chars(answer) and _looks_non_japanese_cjk_output(answer):
             return True
-    elif expected_lang == "ja":
-        if _HANGUL_RE.search(answer):
+        if _contains_cjk_punctuation(answer) and _looks_garbled_output(answer):
             return True
-        kana_count = len(_JAPANESE_RE.findall(answer))
-        latin_count = len(re.findall(r"[A-Za-z]", answer))
-        han_count = len(_CJK_HAN_RE.findall(answer))
-        if kana_count == 0 and han_count == 0 and latin_count >= 5:
+        if not _is_acceptable_japanese_output(answer):
             return True
 
     return False
 
 
 def _rewrite_answer_to_user_language(answer: str, user_message: str, model: str) -> str:
-    """One-shot rewrite pass to remove Chinese and align language with the user."""
+    """One-shot rewrite pass to force natural Japanese and clean layout."""
     rewrite_prompt = f"""[System]
 You are a strict editor.
-Respond in the SAME language as the user message.
-If user message is Korean, output must include natural Korean sentences (Hangul).
-If user message is Japanese, output must include natural Japanese sentences.
-ABSOLUTE RULE: Do not output Chinese characters (中文/汉字) at all.
-If Chinese text exists in the draft, translate/paraphrase it into the user language.
+Respond ONLY in natural Japanese.
+Every non-trivial sentence must read like native Japanese and should use hiragana/katakana where appropriate.
+ABSOLUTE RULES:
+- Do not output Korean.
+- Do not output Chinese text or Chinese-only phrasing.
+- If Chinese text exists in the draft, translate/paraphrase it into natural Japanese.
+- Remove broken line wraps and punctuation-only fragments.
 Preserve facts, order, and citations from the draft answer.
 Do not add new claims.
 
@@ -687,7 +750,7 @@ Do not add new claims.
 {answer}
 
 [Task]
-Rewrite the draft to match the user language and remove Chinese characters.
+Rewrite the draft into clean natural Japanese only.
 """.strip()
 
     rewritten = call_ollama(
@@ -702,7 +765,10 @@ def _translate_to_target_language_fallback(answer: str, model: str, target_langu
     """Last-resort translation into the user's language."""
     prompt = f"""[System]
 Translate the draft answer into natural {target_language}.
-Do not output Chinese characters (中文/汉字).
+Output only Japanese.
+Do not output Korean.
+Do not output Chinese text or Chinese-only phrasing.
+Remove broken line wraps.
 Preserve meaning and important details.
 
 [Draft answer]
@@ -719,11 +785,10 @@ def _apply_language_guard(user_message: str, answer: str, model: str) -> str:
     - Enforce the user's language when it is clearly detectable.
     """
     expected_lang = _expected_output_language(user_message)
-    expect_korean = expected_lang == "ko"
     expect_japanese = expected_lang == "ja"
 
     if not _needs_language_rewrite(user_message, answer):
-        return answer
+        return _normalize_answer_layout(answer)
 
     candidate = answer
     try:
@@ -732,17 +797,16 @@ def _apply_language_guard(user_message: str, answer: str, model: str) -> str:
             if not rewritten:
                 break
             candidate = rewritten
+            candidate = _normalize_answer_layout(candidate)
 
-            no_chinese = expect_japanese or not _contains_chinese_chars(candidate)
-            no_cjk_punct = expect_japanese or not _contains_cjk_punctuation(candidate)
-            has_korean = bool(_HANGUL_RE.search(candidate))
-            has_japanese = bool(_JAPANESE_RE.search(candidate))
+            no_chinese = not _looks_non_japanese_cjk_output(candidate)
+            no_cjk_punct = not _looks_garbled_output(candidate)
+            has_japanese = _is_acceptable_japanese_output(candidate)
             not_garbled = not _looks_garbled_output(candidate)
             if (
                 no_chinese
                 and no_cjk_punct
                 and not_garbled
-                and (not expect_korean or has_korean)
                 and (not expect_japanese or has_japanese)
             ):
                 logger.info("Applied strict language guard.")
@@ -751,11 +815,7 @@ def _apply_language_guard(user_message: str, answer: str, model: str) -> str:
         logger.warning("Strict language guard rewrite failed: %s", e)
 
     # Remove any remaining Chinese chars first and normalize punctuation noise.
-    stripped = candidate or ""
-    if not expect_japanese:
-        stripped = _CJK_HAN_RE.sub("", stripped)
-    if not expect_japanese:
-        stripped = _normalize_cjk_punctuation(stripped)
+    stripped = _normalize_answer_layout(candidate or "")
     stripped = re.sub(r"[ 	]{2,}", " ", stripped)
     stripped = re.sub(r"\n{3,}", "\n\n", stripped).strip()
 
@@ -764,51 +824,33 @@ def _apply_language_guard(user_message: str, answer: str, model: str) -> str:
         try:
             cleaned = _rewrite_answer_to_user_language(stripped, user_message, model)
             if cleaned:
-                if not expect_japanese:
-                    cleaned = _normalize_cjk_punctuation(cleaned)
+                cleaned = _normalize_answer_layout(cleaned)
                 cleaned = _strip_markdown_emphasis(cleaned).strip()
-                if cleaned and (expect_japanese or not _contains_chinese_chars(cleaned)) and not _looks_garbled_output(cleaned):
+                if cleaned and _is_acceptable_japanese_output(cleaned):
                     logger.warning("Applied garbled-output cleanup rewrite in language guard.")
                     return cleaned
         except Exception as e:
             logger.warning("Garbled-output cleanup rewrite failed: %s", e)
 
-    # If user language is expected but still absent, force one translation pass.
-    if expect_korean and not _HANGUL_RE.search(stripped):
-        try:
-            translated = _translate_to_target_language_fallback(stripped or candidate, model, "Korean")
-            if translated:
-                translated = _normalize_cjk_punctuation(translated)
-            if translated and _HANGUL_RE.search(translated) and not _contains_chinese_chars(translated):
-                translated = _strip_markdown_emphasis(translated).strip()
-                if not _contains_cjk_punctuation(translated) and not _looks_garbled_output(translated):
-                    logger.warning("Applied Korean fallback translation in language guard.")
-                    return translated
-        except Exception as e:
-            logger.warning("Korean fallback translation failed: %s", e)
-
-        return "한국어로 답변하도록 재시도했지만 변환에 실패했습니다. 같은 질문을 다시 입력해 주세요."
-
-    if expect_japanese and not _JAPANESE_RE.search(stripped):
+    # If Japanese output is still not acceptable, force one translation pass.
+    if expect_japanese and not _is_acceptable_japanese_output(stripped):
         try:
             translated = _translate_to_target_language_fallback(stripped or candidate, model, "Japanese")
-            if translated and _JAPANESE_RE.search(translated):
+            translated = _normalize_answer_layout(translated)
+            if translated and _is_acceptable_japanese_output(translated):
                 translated = _strip_markdown_emphasis(translated).strip()
-                if not _looks_garbled_output(translated):
-                    logger.warning("Applied Japanese fallback translation in language guard.")
-                    return translated
+                logger.warning("Applied Japanese fallback translation in language guard.")
+                return translated
         except Exception as e:
             logger.warning("Japanese fallback translation failed: %s", e)
 
         return "日本語で回答するよう再試行しましたが、変換に失敗しました。もう一度同じ質問をしてください。"
 
-    if stripped:
+    if stripped and _is_acceptable_japanese_output(stripped):
         logger.warning("Applied hard-strip fallback in language guard.")
         return stripped
 
-    if expect_japanese:
-        return "言語ポリシーに合う応答を生成できませんでした。同じ質問をもう一度試してください。"
-    return "언어 정책에 맞는 응답 생성에 실패했습니다. 같은 질문을 다시 시도해 주세요."
+    return "日本語の応答を安定して生成できませんでした。同じ質問をもう一度試してください。"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1169,6 +1211,7 @@ def handle_chat(
     answer = _apply_language_guard(user_message, answer, selected_model)
     answer = _apply_repetition_guard(user_message, answer, selected_model)
     answer = _strip_markdown_emphasis(answer)
+    answer = _normalize_answer_layout(answer)
 
     # Determine what was used (for UI display)
     mode = "document_qa"
