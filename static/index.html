@@ -172,6 +172,8 @@
     </div>
 </div>
 
+<!-- legacy inline login removed: use /login -->
+<!--
 <div id="login-screen">
     <div class="login-card">
         <div class="login-logo">
@@ -186,6 +188,7 @@
         <div class="login-err" id="li-err">ユーザーIDまたはパスワードが正しくありません。</div>
     </div>
 </div>
+-->
 
 <div id="app">
     <div class="sidebar">
@@ -255,12 +258,25 @@
 <script>
     const API = window.location.origin;
 
-    const USERS = JSON.parse(localStorage.getItem('ai_users') || 'null') || {
+    function safeParseJSON(raw, fallback) {
+        if (!raw) return fallback;
+        try {
+            return JSON.parse(raw);
+        } catch (error) {
+            console.warn('Failed to parse stored JSON:', error);
+            return fallback;
+        }
+    }
+
+    const USERS = safeParseJSON(localStorage.getItem('ai_users'), null) || {
         'admin': { pw: 'admin123', role: '管理者' },
         'tilon': { pw: 'tilon123', role: '一般従業員' },
         'employee1': { pw: '1234', role: '一般従業員' }
     };
 
+    const SESSION_USER_KEY = 'ai_current_user';
+    const LOGIN_PATH = '/login';
+    const SAFE_USER_ID_RE = /^[A-Za-z0-9._-]+$/;
     const CHAT_KEY_PREFIX = 'ai_chats';
     const DOC_KEY_PREFIX = 'ai_uploaded_docs';
     const SYS_PROMPT_KEY_PREFIX = 'ai_sys_prompt';
@@ -342,10 +358,68 @@
     }
 
     function loadUserState() {
-        chats = normalizeChats(JSON.parse(localStorage.getItem(userScopedKey(CHAT_KEY_PREFIX)) || '[]'));
-        uploadedDocs = normalizeDocs(JSON.parse(localStorage.getItem(userScopedKey(DOC_KEY_PREFIX)) || '[]'));
+        chats = normalizeChats(safeParseJSON(localStorage.getItem(userScopedKey(CHAT_KEY_PREFIX)), []));
+        uploadedDocs = normalizeDocs(safeParseJSON(localStorage.getItem(userScopedKey(DOC_KEY_PREFIX)), []));
         systemPrompt = localStorage.getItem(userScopedKey(SYS_PROMPT_KEY_PREFIX)) || DEFAULT_SYSTEM_PROMPT;
         currentChatId = chats.length ? chats[0].id : null;
+    }
+
+    function resolveRouteUserId() {
+        const path = window.location.pathname || '';
+        if (path === '/' || path === LOGIN_PATH || path === '/ui') return null;
+
+        const rawUserId = decodeURIComponent(path.replace(/^\/+/, '').split('/')[0] || '').trim();
+        if (!rawUserId || !SAFE_USER_ID_RE.test(rawUserId)) return null;
+        return rawUserId;
+    }
+
+    function redirectToLogin() {
+        window.location.replace(LOGIN_PATH);
+    }
+
+    async function bootstrapApp() {
+        try {
+            const routeUserId = resolveRouteUserId();
+            const sessionUserId = sessionStorage.getItem(SESSION_USER_KEY);
+            const routeUser = routeUserId ? USERS[routeUserId] : null;
+
+            if (!routeUserId || !routeUser || sessionUserId !== routeUserId) {
+                redirectToLogin();
+                return false;
+            }
+
+            currentUser = { id: routeUserId, role: normalizeUserRole(routeUserId, routeUser.role) };
+            loadUserState();
+            document.getElementById('app').style.display = 'flex';
+            document.getElementById('sb-user').textContent = routeUserId;
+            document.getElementById('u-name').textContent = routeUserId;
+            document.getElementById('u-role').textContent = currentUser.role;
+            document.getElementById('u-avatar').textContent = routeUserId[0].toUpperCase();
+
+            if (chats.length === 0) newChat();
+            else {
+                renderChatList();
+                loadChat(chats[0].id);
+            }
+            renderShelfDocs();
+
+            await Promise.all([loadHealth(), syncDocsFromServer()]);
+            return true;
+        } catch (error) {
+            console.error('Failed to bootstrap app:', error);
+            currentUser = currentUser || { id: resolveRouteUserId() || 'unknown', role: '' };
+            chats = [];
+            uploadedDocs = [];
+            currentChatId = null;
+            document.getElementById('app').style.display = 'flex';
+            document.getElementById('sb-user').textContent = currentUser.id;
+            document.getElementById('u-name').textContent = currentUser.id;
+            document.getElementById('u-role').textContent = currentUser.role || '一般従業員';
+            document.getElementById('u-avatar').textContent = currentUser.id[0]?.toUpperCase() || 'U';
+            newChat();
+            renderShelfDocs();
+            return false;
+        }
     }
 
     function saveChats() {
@@ -382,54 +456,17 @@
             .filter(m => m.content.length > 0);
     }
 
-    async function doLogin() {
-        const id = document.getElementById('li-id').value.trim();
-        const pw = document.getElementById('li-pw').value;
-        const u = USERS[id];
-
-        if (!(u && u.pw === pw)) {
-            document.getElementById('li-err').style.display = 'block';
-            document.getElementById('li-pw').value = '';
-            return;
-        }
-
-        const normalizedRole = normalizeUserRole(id, u.role);
-        currentUser = { id, role: normalizedRole };
-        loadUserState();
-        document.getElementById('li-err').style.display = 'none';
-        document.getElementById('login-screen').style.display = 'none';
-        document.getElementById('app').style.display = 'flex';
-        document.getElementById('sb-user').textContent = id;
-        document.getElementById('u-name').textContent = id;
-        document.getElementById('u-role').textContent = normalizedRole;
-        document.getElementById('u-avatar').textContent = id[0].toUpperCase();
-
-        if (chats.length === 0) newChat();
-        else {
-            renderChatList();
-            loadChat(chats[0].id);
-        }
-        renderShelfDocs();
-
-        await Promise.all([loadHealth(), syncDocsFromServer()]);
-    }
-
     function doLogout() {
         if (shelfUploadInProgress) stopShelfUpload();
+        sessionStorage.removeItem(SESSION_USER_KEY);
         currentUser = null;
         chats = [];
         uploadedDocs = [];
         currentChatId = null;
         systemPrompt = DEFAULT_SYSTEM_PROMPT;
-        document.getElementById('login-screen').style.display = 'flex';
         document.getElementById('app').style.display = 'none';
-        document.getElementById('li-id').value = '';
-        document.getElementById('li-pw').value = '';
+        redirectToLogin();
     }
-
-    document.addEventListener('keydown', e => {
-        if (e.key === 'Enter' && document.getElementById('login-screen').style.display !== 'none') doLogin();
-    });
 
     async function loadHealth() {
         try {
@@ -1038,7 +1075,7 @@
         }
     });
 
-    renderShelfDocs();
+    bootstrapApp();
 </script>
 </body>
 </html>
