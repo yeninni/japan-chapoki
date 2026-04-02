@@ -82,8 +82,7 @@
         .shelf-item-meta { margin-top: 4px; font-size: 11px; color: var(--tm); }
         .shelf-count { margin-left: 6px; padding: 1px 6px; border-radius: 999px; font-size: 10px; font-weight: 700; color: var(--accent); background: rgba(37,99,235,0.10); border: 1px solid rgba(37,99,235,0.25); }
 
-        .quick-menu { margin-top: auto; }
-        .sb-footer { padding: 12px; border-top: 1px solid var(--border); }
+        .sb-footer { margin-top: auto; padding: 12px; border-top: 1px solid var(--border); }
         .user-row { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 6px; }
         .avatar { width: 32px; height: 32px; background: var(--accent); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; color: #fff; flex-shrink: 0; }
         .ur-text { flex: 1; min-width: 0; }
@@ -95,7 +94,6 @@
         .chat-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
         .chat-header { padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; background: var(--bg); flex-shrink: 0; }
         .chat-header h3 { font-size: 15px; font-weight: 700; color: var(--tp); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .model-chip { font-size: 11px; color: var(--ts); background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; padding: 3px 8px; font-family: monospace; }
         .hdr-btn { display: flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg2); color: var(--ts); font-size: 12px; font-family: inherit; cursor: pointer; transition: all .2s; white-space: nowrap; }
         .hdr-btn:hover { border-color: var(--accent); color: var(--accent); }
 
@@ -125,10 +123,6 @@
         .welcome { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px; text-align: center; gap: 10px; }
         .welcome h2 { font-size: 22px; font-weight: 700; color: var(--tp); }
         .welcome p { font-size: 14px; color: var(--ts); max-width: 360px; line-height: 1.6; }
-        .quick-btns { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 8px; }
-        .qb { padding: 7px 14px; background: var(--bg3); border: 1px solid var(--border); border-radius: 20px; color: var(--ts); font-size: 13px; font-family: inherit; cursor: pointer; transition: all .2s; }
-        .qb:hover { border-color: var(--accent); color: var(--accent); }
-
         .input-area { padding: 10px 20px 14px; background: var(--bg); flex-shrink: 0; }
         .input-box { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; display: flex; align-items: flex-end; gap: 6px; padding: 8px 8px 8px 14px; transition: border-color .2s; }
         .input-box:focus-within { border-color: var(--accent); }
@@ -226,15 +220,6 @@
             <input type="file" id="shelf-file" accept=".pdf,.png,.jpg,.jpeg,.webp" multiple style="display:none" onchange="uploadToShelf(this)">
         </div>
 
-        <div class="quick-menu">
-            <div class="sb-sec">
-                <div class="sb-sec-title">クイックメニュー</div>
-                <div class="sb-item" onclick="quickMsg('今日のタスクを整理してください')"><span class="ic">✅</span> タスク整理</div>
-                <div class="sb-item" onclick="quickMsg('メール下書きを作成してください')"><span class="ic">✉️</span> メール作成</div>
-                <div class="sb-item" onclick="quickMsg('会議録を要約してください')"><span class="ic">📄</span> 会議録要約</div>
-            </div>
-        </div>
-
         <div class="sb-footer">
             <div class="user-row">
                 <div class="avatar" id="u-avatar">A</div>
@@ -251,7 +236,6 @@
         <div class="chat-header">
             <span style="font-size:16px">💬</span>
             <h3 id="hdr-title">新しいチャット</h3>
-            <span class="model-chip" id="model-chip">qwen2.5:7b</span>
             <button class="hdr-btn" onclick="openModal('sp-modal')">⚙️ プロンプト</button>
         </div>
 
@@ -302,6 +286,11 @@
 
     function esc(t) {
         return String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function normalizeUserRole(id, role) {
+        if (id === 'admin') return '管理者';
+        return role || '一般従業員';
     }
 
     function toast(msg, dur = 2500) {
@@ -404,14 +393,15 @@
             return;
         }
 
-        currentUser = { id, role: u.role };
+        const normalizedRole = normalizeUserRole(id, u.role);
+        currentUser = { id, role: normalizedRole };
         loadUserState();
         document.getElementById('li-err').style.display = 'none';
         document.getElementById('login-screen').style.display = 'none';
         document.getElementById('app').style.display = 'flex';
         document.getElementById('sb-user').textContent = id;
         document.getElementById('u-name').textContent = id;
-        document.getElementById('u-role').textContent = u.role;
+        document.getElementById('u-role').textContent = normalizedRole;
         document.getElementById('u-avatar').textContent = id[0].toUpperCase();
 
         if (chats.length === 0) newChat();
@@ -445,7 +435,6 @@
         try {
             const r = await fetch(API + '/health');
             const d = await r.json();
-            if (d.model) document.getElementById('model-chip').textContent = d.model;
         } catch {}
     }
 
@@ -496,11 +485,6 @@
             msgs.innerHTML = `<div class="welcome" id="welcome">
                 <h2>何かお手伝いできることはありますか?</h2>
                 <p>アップロードされたファイルがある場合はそれを参照し、一般的な質問にも自然に答えます。</p>
-                <div class="quick-btns">
-                    <button class="qb" onclick="quickMsg('今日のタスクを整理してください')">📝 タスク整理</button>
-                    <button class="qb" onclick="quickMsg('メール返信を作成してください')">✉️ メール作成</button>
-                    <button class="qb" onclick="quickMsg('レポート作成のフォーマットを教えてください')">📊 レポート作成</button>
-                </div>
             </div>`;
         } else {
             chat.messages.forEach(m => renderMsg(m.sender, m.text, m.isUser, !!m.hasScope, false));
