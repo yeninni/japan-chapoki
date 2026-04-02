@@ -208,14 +208,14 @@
         <button class="new-btn" onclick="newChat()">＋ 新しいチャット</button>
         <div class="chat-list" id="chat-list"></div>
 
-        <div class="sb-sec"><div class="sb-sec-title">アップロードファイル保管庫 <span class="shelf-count" id="shelf-count">0個</span></div></div>
+        <div class="sb-sec"><div class="sb-sec-title">アップロード済みファイル <span class="shelf-count" id="shelf-count">0個</span></div></div>
         <div class="shelf-wrap">
             <div class="shelf-head">
                 <button class="shelf-upload-btn" id="shelf-upload-btn" onclick="openShelfUpload()">📎 ファイルをアップロード</button>
                 <button class="shelf-stop-btn" id="shelf-stop-btn" type="button" onclick="stopShelfUpload()">⏹ 停止</button>
             </div>
             <div class="shelf-list" id="shelf-list">
-                <div class="shelf-empty">アップロードされたファイルはありません。</div>
+                <div class="shelf-empty">アップロードされたファイルがありません</div>
             </div>
             <input type="file" id="shelf-file" accept=".pdf,.png,.jpg,.jpeg,.webp" multiple style="display:none" onchange="uploadToShelf(this)">
         </div>
@@ -243,7 +243,7 @@
 
         <div class="input-area">
             <div class="input-box">
-                <textarea id="msg-input" rows="1" placeholder="メッセージを入力... (Shift+Enterで改行)\"></textarea>
+                <textarea id="msg-input" rows="1" placeholder="メッセージを入力... (Shift+Enterで改行)"></textarea>
                 <button class="stop-btn" id="stop-btn" onclick="stopGeneration()" style="display:none">⏹</button>
                 <button class="send-btn" id="send-btn" onclick="sendMsg()">➤</button>
             </div>
@@ -483,8 +483,8 @@
 
         if (chat.messages.length === 0) {
             msgs.innerHTML = `<div class="welcome" id="welcome">
-                <h2>何かお手伝いできることはありますか?</h2>
-                <p>アップロードされたファイルがある場合はそれを参照し、一般的な質問にも自然に答えます。</p>
+                <h2>メッセージを入力してチャットを始めてください</h2>
+                <p>アップロードされたファイルの内容に基づいた回答や、一般的な質問に答えることができます。</p>
             </div>`;
         } else {
             chat.messages.forEach(m => renderMsg(m.sender, m.text, m.isUser, !!m.hasScope, false));
@@ -608,7 +608,7 @@
         const list = document.getElementById('shelf-list');
 
         if (!uploadedDocs.length) {
-            list.innerHTML = '<div class="shelf-empty">アップロードされたファイルはありません。</div>';
+            list.innerHTML = '<div class="shelf-empty">アップロードされたファイルがありません</div>';
             return;
         }
 
