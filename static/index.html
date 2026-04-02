@@ -251,7 +251,7 @@
     const MAX_SHELF_FILES = 90;
     const HISTORY_MAX_MESSAGES = 12;
 
-    const DEFAULT_SYSTEM_PROMPT = 'あなたはTilon AIです。日本語で親切かつ明確に回答してください。中国語(漢字)は絶対に使用しないでください。';
+    const DEFAULT_SYSTEM_PROMPT = 'あなたはTilon AIです。必ず自然な日本語だけで回答してください。中国語や韓国語は出力しないでください。改行は必要な段落だけに使い、壊れた行分割はしないでください。';
 
     let currentUser = null;
     let isLoading = false;
