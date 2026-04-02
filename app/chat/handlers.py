@@ -314,6 +314,23 @@ def _strip_enrichment_header(text: str) -> str:
     return re.sub(r'^\[Document:.*?\]\n', '', text or '', flags=re.DOTALL).strip()
 
 
+def _docs_have_machine_readable_text(docs) -> bool:
+    """Return True when retrieved docs came from a real PDF text layer."""
+    if not docs:
+        return False
+
+    for doc in docs:
+        meta = getattr(doc, "metadata", {}) or {}
+        if meta.get("has_text_layer") is True:
+            return True
+        if meta.get("extraction_method") == "text":
+            return True
+        if meta.get("page_kind") == "digital":
+            return True
+
+    return False
+
+
 def _format_direct_extraction_text(user_message: str, extracted: str) -> str:
     """Return raw extracted text with a localized label and no interpretation."""
     if _HANGUL_RE.search(user_message):
@@ -396,7 +413,7 @@ def _build_direct_extraction_answer(active_source: Optional[str], docs, user_mes
         fallback_doc_id = docs[0].metadata.get("doc_id") if docs else None
         return _document_not_found_answer(user_message or "extract text", fallback_source, fallback_doc_id)
 
-    if _looks_unreliable_extracted_text(extracted, user_message=user_message):
+    if (not _docs_have_machine_readable_text(docs)) and _looks_unreliable_extracted_text(extracted, user_message=user_message):
         fallback_source = active_source or (docs[0].metadata.get("source") if docs else None)
         return _document_read_failure_answer(user_message, fallback_source)
 
@@ -959,7 +976,7 @@ def handle_chat(
 
             fresh_text = _extract_text_from_upload_source(scoped_source, user_id=user_id, source_path=(docs[0].metadata.get("source_path") if docs else None))
             if fresh_text:
-                if _looks_unreliable_extracted_text(fresh_text, user_message=user_message):
+                if (not _docs_have_machine_readable_text(docs)) and _looks_unreliable_extracted_text(fresh_text, user_message=user_message):
                     extraction_answer = _document_read_failure_answer(user_message, scoped_source or active_source)
                 else:
                     extraction_answer = _format_direct_extraction_text(user_message, fresh_text)
@@ -1082,7 +1099,12 @@ def handle_chat(
             for doc in docs
             if _strip_enrichment_header(doc.page_content)
         ).strip()
-        if has_any_scope and combined_scoped_text and _looks_unreliable_extracted_text(combined_scoped_text, user_message=user_message):
+        if (
+            has_any_scope
+            and combined_scoped_text
+            and (not _docs_have_machine_readable_text(docs))
+            and _looks_unreliable_extracted_text(combined_scoped_text, user_message=user_message)
+        ):
             return {
                 "answer": _document_read_failure_answer(
                     user_message,
