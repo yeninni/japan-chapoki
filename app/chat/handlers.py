@@ -36,6 +36,12 @@ _SIMPLIFIED_CHINESE_RE = re.compile(
     r"(这是|请用|无法|没有)|[这们为说开点实观见将让还吗应没]"
 )
 _SCOPED_FULL_CONTEXT_RETRY_MAX_CHUNKS = 12
+_DATE_RANGE_RE = re.compile(
+    r"((?:20\d{2}|19\d{2})年\s*\d{1,2}月\s*\d{1,2}日(?:\s*[\(（][^)）]+[\)）])?)\s*[~～\-−ー]\s*(\d{1,2}月\s*\d{1,2}日(?:\s*[\(（][^)）]+[\)）])?)"
+)
+_FULL_DATE_RE = re.compile(
+    r"((?:20\d{2}|19\d{2})年\s*\d{1,2}月\s*\d{1,2}日(?:\s*[\(（][^)）]+[\)）])?)"
+)
 
 
 def _needs_full_document_context(text: str) -> bool:
@@ -51,6 +57,8 @@ def _needs_full_document_context(text: str) -> bool:
         "structure", "outline", "overview", "summarize", "summary",
         "analyze", "analysis", "key points", "main points", "extract key",
         "extract data", "important information", "important info",
+        "概要", "会社概要", "企業概要", "設立", "設立日", "ビジョン", "価値",
+        "核心価値", "コア価値", "主要製品", "市場の地位", "今後の展望", "結論",
     ]
     return any(keyword in lower for keyword in indicators)
 
@@ -144,6 +152,50 @@ def _is_direct_extraction_query(text: str) -> bool:
         "read this image", "text in the image", "transcribe",
     ]
     return any(keyword in lower for keyword in indicators)
+
+
+def _is_date_fact_query(text: str) -> bool:
+    """Detect questions asking for an exact date or date range."""
+    lower = (text or "").lower().strip()
+    indicators = [
+        "いつ", "何日", "何日から", "何日まで", "会期", "開催日", "開催期間", "日程", "期間",
+        "날짜", "언제", "기간", "개최", "며칠",
+        "when", "date", "dates", "period", "schedule",
+    ]
+    return any(keyword in lower for keyword in indicators)
+
+
+def _normalize_date_text(text: str) -> str:
+    cleaned = re.sub(r"\s+", "", text or "")
+    cleaned = cleaned.replace("（", "（").replace(")", "）")
+    return cleaned
+
+
+def _extract_date_answer_from_docs(user_message: str, docs) -> Optional[str]:
+    """Return an exact date/date-range answer from retrieved document text."""
+    if not docs or not _is_date_fact_query(user_message):
+        return None
+
+    combined = "\n".join(
+        _strip_enrichment_header(getattr(doc, "page_content", "") or "")
+        for doc in docs
+    )
+    if not combined.strip():
+        return None
+
+    range_match = _DATE_RANGE_RE.search(combined)
+    if range_match:
+        start, end = range_match.groups()
+        start = _normalize_date_text(start)
+        end = _normalize_date_text(end)
+        return f"開催期間は{start}から{end}までです。"
+
+    date_match = _FULL_DATE_RE.search(combined)
+    if date_match:
+        exact_date = _normalize_date_text(date_match.group(1))
+        return f"該当する日付は{exact_date}です。"
+
+    return None
 
 
 def _normalize_for_match(text: str) -> str:
@@ -501,7 +553,7 @@ CRITICAL RULES:
 4. Answer ONLY from the retrieved document context. Do not use general knowledge, prior assumptions, or web knowledge.
 5. If the retrieved document context is missing, weak, unrelated, or insufficient, say you do not know in Japanese.
 6. Never guess, summarize from memory, or fill gaps with plausible information.
-7. When document evidence is available, cite the source naturally in Japanese (document name, page number).
+7. Do not mention source names, file names, page numbers, citations, references, or evidence labels unless the user explicitly asks for them.
 8. Keep paragraphs clean. Do not produce broken line fragments or punctuation-only lines.
 9. Do NOT use markdown emphasis symbols in the final answer (forbidden: **, __). Output plain text only."""
 
@@ -637,6 +689,29 @@ def _strip_markdown_emphasis(text: str) -> str:
     return cleaned
 
 
+def _strip_source_reference_lines(text: str) -> str:
+    """Remove source/citation style lines from final answers."""
+    if not text:
+        return text
+
+    cleaned_lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if re.match(r"^(参考|参考資料|参考ドキュメント|出典|根拠|参照)\s*[:：]", stripped):
+            continue
+        if re.match(r"^(source|sources|reference|references|citation|citations)\s*[:：]", stripped, flags=re.IGNORECASE):
+            continue
+        if re.match(r"^(document|page)\s*[:：]", stripped, flags=re.IGNORECASE):
+            continue
+        cleaned_lines.append(line)
+
+    cleaned = "\n".join(cleaned_lines)
+    cleaned = re.sub(r"\(\s*(?:p|page)\.?\s*\d+\s*\)", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(?:page|p)\.?\s*\d+\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    return cleaned.strip()
+
+
 def _expects_korean_output(user_message: str) -> bool:
     """Treat messages containing Hangul as Korean-mode conversations."""
     return bool(_HANGUL_RE.search(user_message or ""))
@@ -739,6 +814,7 @@ ABSOLUTE RULES:
 - Do not output Korean.
 - Do not output Chinese text or Chinese-only phrasing.
 - If Chinese text exists in the draft, translate/paraphrase it into natural Japanese.
+- Remove source names, file names, page numbers, citation labels, and reference sections unless the user explicitly asked for them.
 - Remove broken line wraps and punctuation-only fragments.
 Preserve facts, order, and citations from the draft answer.
 Do not add new claims.
@@ -1198,6 +1274,22 @@ def handle_chat(
             "active_doc_id": scoped_doc_id or active_doc_id,
         }
 
+    exact_date_answer = _extract_date_answer_from_docs(user_message, docs)
+    if exact_date_answer:
+        resolved_active_source = scoped_source or active_source
+        resolved_active_doc_id = scoped_doc_id or active_doc_id
+        if (not resolved_active_source or not resolved_active_doc_id) and sources:
+            first_source = sources[0] or {}
+            resolved_active_source = resolved_active_source or first_source.get("source")
+            resolved_active_doc_id = resolved_active_doc_id or first_source.get("doc_id")
+        return {
+            "answer": exact_date_answer,
+            "sources": sources,
+            "mode": "document_qa",
+            "active_source": resolved_active_source,
+            "active_doc_id": resolved_active_doc_id,
+        }
+
     # ── Step 2: Build prompt with retrieved document evidence only ──
     prompt = _build_prompt(
         user_message=user_message,
@@ -1211,6 +1303,7 @@ def handle_chat(
     answer = _apply_language_guard(user_message, answer, selected_model)
     answer = _apply_repetition_guard(user_message, answer, selected_model)
     answer = _strip_markdown_emphasis(answer)
+    answer = _strip_source_reference_lines(answer)
     answer = _normalize_answer_layout(answer)
 
     # Determine what was used (for UI display)
