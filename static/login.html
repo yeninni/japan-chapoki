@@ -4,9 +4,19 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tilon AI ログイン</title>
+    <link rel="icon" type="image/svg+xml" href="/static/tilon-logo.svg?v=3">
+    <link rel="shortcut icon" href="/static/tilon-logo.svg?v=3">
     <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        img {
+            border: none !important;
+            outline: none !important;
+            box-shadow: none !important;
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: crisp-edges;
+            background-color: transparent !important;
+        }
         :root {
             --bg: #f5f6f8;
             --bg2: #ffffff;
@@ -36,9 +46,17 @@
             width: min(100%, 400px);
             box-shadow: 0 8px 40px rgba(0, 0, 0, 0.10);
         }
-        .login-logo {
+        .logo-wrapper {
             display: flex;
             align-items: center;
+            background-color: transparent;
+            gap: 0;
+        }
+        .logo-wrapper img {
+            display: block;
+            mix-blend-mode: multiply;
+        }
+        .login-logo {
             gap: 12px;
             margin-bottom: 32px;
         }
@@ -117,7 +135,7 @@
 </head>
 <body>
     <main class="login-card">
-        <div class="login-logo">
+        <div class="login-logo logo-wrapper">
             <img class="brand-mark" src="/static/tilon-logo.svg?v=2" alt="Tilon AI ロゴ">
             <span>Tilon AI</span>
         </div>

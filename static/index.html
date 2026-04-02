@@ -4,9 +4,19 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tilon AI チャットボット</title>
+    <link rel="icon" type="image/svg+xml" href="/static/tilon-logo.svg?v=3">
+    <link rel="shortcut icon" href="/static/tilon-logo.svg?v=3">
     <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        img {
+            border: none !important;
+            outline: none !important;
+            box-shadow: none !important;
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: crisp-edges;
+            background-color: transparent !important;
+        }
         :root {
             --bg: #f5f6f8; --bg2: #ffffff; --bg3: #f0f1f3; --bgh: #e8eaed;
             --accent: #2563eb; --accent2: #3b82f6;
@@ -16,6 +26,8 @@
         }
         body { font-family: 'Pretendard', -apple-system, sans-serif; background: var(--bg); color: var(--tp); height: 100vh; overflow: hidden; }
 
+        .logo-wrapper { display: flex; align-items: center; background-color: transparent; gap: 0; }
+        .logo-wrapper img { display: block; mix-blend-mode: multiply; }
         .brand-mark { display: block; height: auto; flex-shrink: 0; }
         .brand-mark.login { width: 52px; }
         .brand-mark.sidebar { width: 34px; margin-right: 10px; }
@@ -161,7 +173,7 @@
 <div id="app">
     <div class="sidebar">
         <div class="sb-header">
-            <div class="ws-name">
+            <div class="ws-name logo-wrapper">
 <img class="brand-mark sidebar" src="/static/tilon-logo.svg?v=2" alt="Tilon AI ロゴ">
                 Tilon AI
             </div>
