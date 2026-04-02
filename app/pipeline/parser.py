@@ -91,7 +91,12 @@ def _gibberish_ratio(text: str) -> float:
         return 1.0
 
     valid_chars = re.findall(
-        r"[A-Za-z0-9\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F.,:;!?()\[\]{}%/\-_=+\'\"@#&*]",
+        r"[A-Za-z0-9"
+        r"\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F"
+        r"\u3040-\u30FF\u31F0-\u31FF\u4E00-\u9FFF"
+        r"\u3005\u3007"
+        r".,:;!?()\[\]{}%/\-_=+\'\"@#&*"
+        r"，。！？；：「」『』【】《》〈〉（）〔〕［］ー・]",
         stripped,
     )
     ratio = 1.0 - (len(valid_chars) / max(len(stripped), 1))

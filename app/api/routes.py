@@ -46,7 +46,6 @@ from app.core.document_registry import clear_document_registry, remove_documents
 from app.core.watcher import suppress_watcher_for
 from app.core.vectorstore import (
     get_vectorstore,
-    get_collection_stats,
     get_all_metadata,
     delete_documents,
     reset as reset_vectorstore,
@@ -117,14 +116,13 @@ def root():
 def health():
     try:
         ollama_status = check_ollama_health()
-        stats = get_collection_stats()
 
         return {
             "status": "ok",
             "ollama": ollama_status["status"],
             "model": OLLAMA_MODEL,
             "available_models": AVAILABLE_MODELS,
-            "documents_in_vectorstore": stats["total_chunks"],
+            "documents_in_vectorstore": None,
             "ocr_enabled": ENABLE_OCR,
             "ocr_engine": OCR_ENGINE,
             "vision_model": VISION_MODEL,

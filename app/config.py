@@ -91,7 +91,7 @@ CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "150"))
 # ── Features ──────────────────────────────────────────────────────────
 ENABLE_OCR = os.getenv("ENABLE_OCR", "true").lower() == "true"
 OCR_ENGINE = os.getenv("OCR_ENGINE", "auto").strip().lower()
-PADDLEOCR_DEFAULT_LANG = os.getenv("PADDLEOCR_DEFAULT_LANG", "korean").strip().lower()
+PADDLEOCR_DEFAULT_LANG = os.getenv("PADDLEOCR_DEFAULT_LANG", "japan").strip().lower()
 AUTO_INGEST_ON_STARTUP = os.getenv("AUTO_INGEST_ON_STARTUP", "false").lower() == "true"
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
 WHISPER_LANGUAGE = os.getenv("WHISPER_LANGUAGE", "ja")

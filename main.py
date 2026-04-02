@@ -29,7 +29,6 @@ from app.config import (
     RERANKER_ENABLED,
     RERANKER_MODEL,
 )
-from app.core.vectorstore import get_vectorstore
 from app.core.watcher import start_watcher, stop_watcher
 from app.pipeline.ingest import ingest_folder
 from app.api.routes import router as main_router
@@ -60,8 +59,7 @@ async def lifespan(app: FastAPI):
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Initialize vectorstore
-    get_vectorstore()
+    logger.info("Vectorstore initialization deferred until first retrieval request.")
 
     # Auto-ingest if configured
     if AUTO_INGEST_ON_STARTUP:

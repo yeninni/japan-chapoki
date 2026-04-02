@@ -32,6 +32,7 @@ _HANGUL_RE = re.compile(r"[가-힣]")
 _JAPANESE_RE = re.compile(r"[\u3040-\u30ff\u31f0-\u31ff]")
 _CJK_HAN_RE = re.compile(r"[\u4e00-\u9fff]")
 _CJK_PUNCT_RE = re.compile(r"[，。！？；：、﹐﹒﹔﹕「」『』【】《》〈〉（）〔〕］［]")
+_SCOPED_FULL_CONTEXT_RETRY_MAX_CHUNKS = 12
 
 
 def _needs_full_document_context(text: str) -> bool:
@@ -179,6 +180,47 @@ def _list_uploaded_sources(owner_id: Optional[str] = None) -> List[str]:
         return []
 
 
+def _find_uploaded_document_by_source(source: str, owner_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Return the newest uploaded document entry for a given source name."""
+    try:
+        matches = [
+            doc for doc in list_documents(owner_id=owner_id, source_type="upload")
+            if str(doc.get("source") or "").strip() == str(source or "").strip()
+        ]
+        if not matches:
+            return None
+        matches.sort(
+            key=lambda doc: (
+                str(doc.get("uploaded_at") or ""),
+                str(doc.get("updated_at") or ""),
+            ),
+            reverse=True,
+        )
+        return matches[0]
+    except Exception as e:
+        logger.debug("Failed to resolve uploaded document by source '%s': %s", source, e)
+        return None
+
+
+def _get_most_recent_uploaded_document(owner_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Return the newest uploaded document for the current user."""
+    try:
+        docs = list_documents(owner_id=owner_id, source_type="upload")
+        if not docs:
+            return None
+        docs.sort(
+            key=lambda doc: (
+                str(doc.get("uploaded_at") or ""),
+                str(doc.get("updated_at") or ""),
+            ),
+            reverse=True,
+        )
+        return docs[0]
+    except Exception as e:
+        logger.debug("Failed to resolve most recent uploaded document: %s", e)
+        return None
+
+
 def _infer_upload_source_from_query_or_history(user_message: str, history: List[Message], owner_id: Optional[str] = None) -> Optional[str]:
     """Best-effort: infer which uploaded file the user is referring to."""
     sources = _list_uploaded_sources(owner_id=owner_id)
@@ -317,8 +359,16 @@ def _looks_unreliable_extracted_text(text: str, user_message: str = "") -> bool:
 
     latin_tokens = re.findall(r"\b[A-Za-z0-9]{4,}\b", sample)
     uppercase_tokens = [tok for tok in latin_tokens if tok.upper() == tok and re.search(r"[A-Z]", tok)]
+    alpha_tokens = re.findall(r"\b[A-Za-z]{4,}\b", sample)
+    upperish_tokens = [
+        tok for tok in alpha_tokens
+        if (sum(1 for ch in tok if ch.isupper()) / max(1, len(tok))) >= 0.6
+    ]
+    uppercase_count = len(re.findall(r"[A-Z]", sample))
+    ascii_alpha_count = len(re.findall(r"[A-Za-z]", sample))
     lowercase_count = len(re.findall(r"[a-z]", sample))
     japanese_count = len(re.findall(r"[\u3040-\u30ff\u31f0-\u31ff\u4e00-\u9fff]", sample))
+    uppercase_ratio = (uppercase_count / ascii_alpha_count) if ascii_alpha_count else 0.0
 
     if latin_tokens and len(uppercase_tokens) >= 4 and len(uppercase_tokens) >= int(len(latin_tokens) * 0.7):
         if lowercase_count == 0 and japanese_count == 0:
@@ -326,6 +376,8 @@ def _looks_unreliable_extracted_text(text: str, user_message: str = "") -> bool:
 
     if _JAPANESE_RE.search(user_message):
         if japanese_count == 0 and len(uppercase_tokens) >= 3 and lowercase_count == 0:
+            return True
+        if japanese_count <= 2 and ascii_alpha_count >= 40 and uppercase_ratio >= 0.55 and len(upperish_tokens) >= 5:
             return True
 
     return False
@@ -349,6 +401,56 @@ def _build_direct_extraction_answer(active_source: Optional[str], docs, user_mes
         return _document_read_failure_answer(user_message, fallback_source)
 
     return _format_direct_extraction_text(user_message, extracted)
+
+
+def _retry_scoped_retrieval_with_full_document(
+    user_message: str,
+    scoped_source: Optional[str],
+    scoped_doc_id: Optional[str],
+    scoped_source_type: Optional[str],
+    owner_id: Optional[str] = None,
+) -> Optional[Any]:
+    """
+    When scoped retrieval is too weak, retry once with the full document.
+
+    This prevents immediate "not found" fallbacks for recent uploads where
+    semantic retrieval misses broad questions like "summarize this PDF".
+    """
+    if not (scoped_source or scoped_doc_id):
+        return None
+
+    try:
+        chunk_count = get_document_chunk_count(
+            source=scoped_source,
+            doc_id=scoped_doc_id,
+            source_type=scoped_source_type,
+            owner_id=owner_id,
+        )
+    except Exception as e:
+        logger.debug("Could not inspect scoped document for full-context retry: %s", e)
+        return None
+
+    if chunk_count <= 0 or chunk_count > _SCOPED_FULL_CONTEXT_RETRY_MAX_CHUNKS:
+        return None
+
+    retry = retrieve(
+        user_message,
+        source_filter=scoped_source,
+        doc_id_filter=scoped_doc_id,
+        source_type_filter=scoped_source_type,
+        owner_id_filter=owner_id,
+        full_document=True,
+    )
+    if retry.docs:
+        logger.info(
+            "Retrying scoped query with full document context: %d chunks from '%s'%s",
+            len(retry.docs),
+            scoped_source or "scoped document",
+            f" ({scoped_doc_id})" if scoped_doc_id else "",
+        )
+        return retry
+
+    return None
 
 
 def _scoped_confidence_threshold(docs) -> float:
@@ -820,6 +922,21 @@ def handle_chat(
         inferred_source = _infer_upload_source_from_query_or_history(user_message, history, owner_id=user_id)
         if inferred_source:
             scoped_source = inferred_source
+            inferred_doc = _find_uploaded_document_by_source(inferred_source, owner_id=user_id)
+            if inferred_doc:
+                scoped_doc_id = scoped_doc_id or inferred_doc.get("doc_id")
+
+    if not (scoped_source or scoped_doc_id) and document_intent:
+        recent_upload = _get_most_recent_uploaded_document(owner_id=user_id)
+        if recent_upload:
+            scoped_source = str(recent_upload.get("source") or "").strip() or None
+            scoped_doc_id = str(recent_upload.get("doc_id") or "").strip() or None
+            scoped_source_type = scoped_source_type or "upload"
+            logger.info(
+                "Recovered upload scope from most recent document: '%s'%s",
+                scoped_source or "unknown",
+                f" ({scoped_doc_id})" if scoped_doc_id else "",
+            )
 
     if _is_direct_extraction_query(user_message) and not (scoped_source or scoped_doc_id) and scoped_source_type == "upload":
         upload_sources = _list_uploaded_sources(owner_id=user_id)
@@ -842,7 +959,10 @@ def handle_chat(
 
             fresh_text = _extract_text_from_upload_source(scoped_source, user_id=user_id, source_path=(docs[0].metadata.get("source_path") if docs else None))
             if fresh_text:
-                extraction_answer = _format_direct_extraction_text(user_message, fresh_text)
+                if _looks_unreliable_extracted_text(fresh_text, user_message=user_message):
+                    extraction_answer = _document_read_failure_answer(user_message, scoped_source or active_source)
+                else:
+                    extraction_answer = _format_direct_extraction_text(user_message, fresh_text)
             else:
                 extraction_answer = _build_direct_extraction_answer(scoped_source, docs, user_message=user_message)
 
@@ -897,28 +1017,40 @@ def handle_chat(
 
             # Explicit per-file scope should remain strict.
             if has_explicit_scope:
-                return {
-                    "answer": _document_not_found_answer(
-                        user_message,
-                        active_source or ("uploaded files" if active_source_type == "upload" else None),
-                        active_doc_id,
-                    ),
-                    "sources": [],
-                    "mode": "document_qa",
-                    "active_source": active_source,
-                    "active_doc_id": active_doc_id,
-                }
+                retry = _retry_scoped_retrieval_with_full_document(
+                    user_message,
+                    scoped_source,
+                    scoped_doc_id,
+                    scoped_source_type,
+                    owner_id=user_id,
+                )
+                if retry:
+                    retrieval = retry
+                    docs = retrieval.docs
+                    use_full_document = True
+                else:
+                    return {
+                        "answer": _document_not_found_answer(
+                            user_message,
+                            scoped_source or active_source or ("uploaded files" if scoped_source_type == "upload" else None),
+                            scoped_doc_id or active_doc_id,
+                        ),
+                        "sources": [],
+                        "mode": "document_qa",
+                        "active_source": scoped_source or active_source,
+                        "active_doc_id": scoped_doc_id or active_doc_id,
+                    }
 
             return {
                 "answer": _document_not_found_answer(
                     user_message,
-                    active_source or ("uploaded PDFs" if active_source_type == "upload" else None),
-                    active_doc_id,
+                    scoped_source or active_source or ("uploaded PDFs" if scoped_source_type == "upload" else None),
+                    scoped_doc_id or active_doc_id,
                 ),
                 "sources": [],
                 "mode": "document_qa",
-                "active_source": active_source,
-                "active_doc_id": active_doc_id,
+                "active_source": scoped_source or active_source,
+                "active_doc_id": scoped_doc_id or active_doc_id,
             }
 
     if docs and not has_any_scope and not use_full_document:
@@ -958,8 +1090,8 @@ def handle_chat(
                 ),
                 "sources": sources,
                 "mode": "document_qa",
-                "active_source": active_source,
-                "active_doc_id": active_doc_id,
+                "active_source": scoped_source or active_source,
+                "active_doc_id": scoped_doc_id or active_doc_id,
             }
 
         if use_full_document:
@@ -998,8 +1130,8 @@ def handle_chat(
             ),
             "sources": [],
             "mode": "document_qa",
-            "active_source": active_source,
-            "active_doc_id": active_doc_id,
+            "active_source": scoped_source or active_source,
+            "active_doc_id": scoped_doc_id or active_doc_id,
         }
 
     # ── Step 2: Build prompt with retrieved document evidence only ──
