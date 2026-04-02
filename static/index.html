@@ -16,23 +16,9 @@
         }
         body { font-family: 'Pretendard', -apple-system, sans-serif; background: var(--bg); color: var(--tp); height: 100vh; overflow: hidden; }
 
-        #login-screen { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; z-index: 200; }
-        .login-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 48px 40px; width: 400px; box-shadow: 0 8px 40px rgba(0,0,0,.10); }
-        .login-logo { display: flex; align-items: center; gap: 12px; margin-bottom: 32px; }
-        .login-logo span { font-size: 20px; font-weight: 700; color: var(--tp); }
         .brand-mark { display: block; height: auto; flex-shrink: 0; }
         .brand-mark.login { width: 52px; }
         .brand-mark.sidebar { width: 34px; margin-right: 10px; }
-        .login-card h2 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
-        .login-card p { font-size: 14px; color: var(--ts); margin-bottom: 28px; }
-        .fg { margin-bottom: 16px; }
-        .fg label { display: block; font-size: 12px; font-weight: 700; color: var(--ts); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .5px; }
-        .fg input { width: 100%; background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; color: var(--tp); font-size: 15px; font-family: inherit; outline: none; transition: border-color .2s; }
-        .fg input:focus { border-color: var(--accent); }
-        .login-btn { width: 100%; padding: 11px; background: var(--accent); color: #fff; border: none; border-radius: 6px; font-size: 15px; font-weight: 600; font-family: inherit; cursor: pointer; margin-top: 8px; }
-        .login-btn:hover { background: var(--accent2); }
-        .login-err { color: var(--danger); font-size: 13px; margin-top: 10px; text-align: center; display: none; }
-
         #app { display: none; height: 100vh; flex-direction: row; }
 
         .sidebar { width: var(--sw); background: var(--bg2); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; overflow: hidden; }
@@ -171,24 +157,6 @@
         </div>
     </div>
 </div>
-
-<!-- legacy inline login removed: use /login -->
-<!--
-<div id="login-screen">
-    <div class="login-card">
-        <div class="login-logo">
-<img class="brand-mark login" src="/static/tilon-logo.svg?v=2" alt="Tilon AI ロゴ">
-            <span>Tilon AI</span>
-        </div>
-        <h2>ログイン</h2>
-        <p>職員アカウントでログインしてください</p>
-        <div class="fg"><label>ユーザーID</label><input type="text" id="li-id" placeholder="ユーザーIDを入力" autocomplete="off"></div>
-        <div class="fg"><label>パスワード</label><input type="password" id="li-pw" placeholder="パスワードを入力"></div>
-        <button class="login-btn" onclick="doLogin()">ログイン</button>
-        <div class="login-err" id="li-err">ユーザーIDまたはパスワードが正しくありません。</div>
-    </div>
-</div>
--->
 
 <div id="app">
     <div class="sidebar">
@@ -388,12 +356,13 @@
                 return false;
             }
 
-            currentUser = { id: routeUserId, role: normalizeUserRole(routeUserId, routeUser.role) };
+            const normalizedRole = normalizeUserRole(routeUserId, routeUser.role);
+            currentUser = { id: routeUserId, role: normalizedRole };
             loadUserState();
             document.getElementById('app').style.display = 'flex';
             document.getElementById('sb-user').textContent = routeUserId;
             document.getElementById('u-name').textContent = routeUserId;
-            document.getElementById('u-role').textContent = currentUser.role;
+            document.getElementById('u-role').textContent = normalizedRole;
             document.getElementById('u-avatar').textContent = routeUserId[0].toUpperCase();
 
             if (chats.length === 0) newChat();
@@ -414,7 +383,7 @@
             document.getElementById('app').style.display = 'flex';
             document.getElementById('sb-user').textContent = currentUser.id;
             document.getElementById('u-name').textContent = currentUser.id;
-            document.getElementById('u-role').textContent = currentUser.role || '一般従業員';
+            document.getElementById('u-role').textContent = normalizeUserRole(currentUser.id, currentUser.role);
             document.getElementById('u-avatar').textContent = currentUser.id[0]?.toUpperCase() || 'U';
             newChat();
             renderShelfDocs();
@@ -470,8 +439,7 @@
 
     async function loadHealth() {
         try {
-            const r = await fetch(API + '/health');
-            const d = await r.json();
+            await fetch(API + '/health');
         } catch {}
     }
 
