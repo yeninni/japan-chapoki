@@ -886,10 +886,7 @@
     function shouldUseUploadScope(chat, text) {
         if (!uploadedDocs.length) return false;
         if (isGeneralChatOverride(text)) return false;
-        if (isDocumentIntent(text)) return true;
-        if (chat.active_source || chat.active_doc_id) return true;
-        if (isDocumentFollowup(text)) return true;
-        return false;
+        return true;
     }
 
     async function sendMsg() {

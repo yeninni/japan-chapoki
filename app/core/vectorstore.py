@@ -77,11 +77,16 @@ def get_vectorstore() -> Chroma:
 
     if _vectorstore is None:
         CHROMA_DIR.mkdir(parents=True, exist_ok=True)
-        _vectorstore = Chroma(
-            collection_name="rag_docs",
-            embedding_function=get_embeddings(),
-            persist_directory=str(CHROMA_DIR),
-        )
+        try:
+            _vectorstore = Chroma(
+                collection_name="rag_docs",
+                embedding_function=get_embeddings(),
+                persist_directory=str(CHROMA_DIR),
+            )
+        except Exception as e:
+            if _switch_to_cpu_embeddings_due_to_oom(e):
+                return get_vectorstore()
+            raise
         count = _vectorstore._collection.count()
         rebuild_keyword_index(get_all_documents())
         logger.info("Vectorstore ready — %d chunks loaded.", count)
