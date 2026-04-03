@@ -42,6 +42,31 @@ _DATE_RANGE_RE = re.compile(
 _FULL_DATE_RE = re.compile(
     r"((?:20\d{2}|19\d{2})年\s*\d{1,2}月\s*\d{1,2}日(?:\s*[\(（][^)）]+[\)）])?)"
 )
+_YEAR_RE = re.compile(r"\b((?:19|20)\d{2})\b")
+_NUMERIC_VALUE_RE = re.compile(
+    r"(?<![\d.])"
+    r"(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)"
+    r"(?:\s*(억|万|만|천|千|백|百))?"
+    r"(?:\s*(명|人|원|円|개|件|건|세대|%|퍼센트))?"
+    r"(?!\d)"
+)
+_NUMERIC_COMPARISON_KEYWORDS = [
+    "차이", "차이점", "비교", "증가", "감소", "증감", "변화", "전년", "대비",
+    "얼마나", "difference", "compare", "comparison", "increase", "decrease",
+    "change", "delta", "人口", "인구", "population",
+]
+_NUMERIC_QUERY_STOPWORDS = {
+    "자료", "문서", "파일", "보고서", "수치", "숫자", "값", "년도", "연도", "년", "자료랑",
+    "나와있는", "있는", "에서", "이랑", "와", "과", "의", "를", "을", "은", "는", "이", "가",
+    "차이", "차이점", "비교", "증가", "감소", "증감", "변화", "계산", "계산해", "계산하고싶을",
+    "difference", "compare", "comparison", "increase", "decrease", "change",
+    "between", "from", "to", "and", "with", "value", "values", "year", "years",
+    "資料", "文書", "ファイル", "数値", "数字", "値", "差", "比較", "増加", "減少", "変化",
+}
+_NUMERIC_METRIC_ALIASES = {
+    "人口": {"인구", "人口", "population"},
+    "売上": {"매출", "売上", "sales", "revenue"},
+}
 
 
 def _needs_full_document_context(text: str) -> bool:
@@ -196,6 +221,235 @@ def _extract_date_answer_from_docs(user_message: str, docs) -> Optional[str]:
         return f"該当する日付は{exact_date}です。"
 
     return None
+
+
+def _extract_distinct_years(text: str) -> List[str]:
+    seen = set()
+    years: List[str] = []
+    for year in _YEAR_RE.findall(text or ""):
+        if year in seen:
+            continue
+        seen.add(year)
+        years.append(year)
+    return years
+
+
+def _is_numeric_comparison_query(text: str) -> bool:
+    """Detect year-over-year numeric comparison questions."""
+    lower = (text or "").lower().strip()
+    years = _extract_distinct_years(lower)
+    if len(years) < 2:
+        return False
+    return any(keyword in lower for keyword in _NUMERIC_COMPARISON_KEYWORDS)
+
+
+def _extract_metric_tokens(text: str) -> List[str]:
+    normalized = _normalize_for_match(_YEAR_RE.sub(" ", text or ""))
+    tokens: List[str] = []
+    seen = set()
+    for token in normalized.split():
+        if len(token) < 2 or token in _NUMERIC_QUERY_STOPWORDS:
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        tokens.append(token)
+    return tokens[:4]
+
+
+def _resolve_metric_label(text: str) -> Optional[str]:
+    normalized = _normalize_for_match(text)
+    for label, aliases in _NUMERIC_METRIC_ALIASES.items():
+        if any(alias.lower() in normalized for alias in aliases):
+            return label
+    return None
+
+
+def _parse_numeric_value(raw: str, scale: Optional[str]) -> Optional[float]:
+    try:
+        value = float(str(raw or "").replace(",", ""))
+    except ValueError:
+        return None
+
+    multiplier = {
+        "억": 100_000_000,
+        "万": 10_000,
+        "만": 10_000,
+        "천": 1_000,
+        "千": 1_000,
+        "백": 100,
+        "百": 100,
+    }.get(scale or "", 1)
+    return value * multiplier
+
+
+def _format_numeric_value(value: float) -> str:
+    if abs(value - round(value)) < 1e-9:
+        return f"{int(round(value)):,}"
+    text = f"{value:,.2f}"
+    return text.rstrip("0").rstrip(".")
+
+
+def _score_numeric_candidate(
+    window: str,
+    line: str,
+    year: str,
+    metric_tokens: List[str],
+    value_match: re.Match,
+    parsed_value: float,
+    unit: Optional[str],
+    scale: Optional[str],
+) -> int:
+    score = 0
+    normalized_window = _normalize_for_match(window)
+    if metric_tokens and any(token in normalized_window for token in metric_tokens):
+        score += 40
+    if year in line:
+        score += 20
+
+    year_index = window.find(year)
+    if year_index >= 0:
+        distance = abs(value_match.start() - year_index)
+        score += max(0, 30 - min(distance, 30))
+
+    raw_match = value_match.group(0)
+    if unit:
+        score += 8
+    if scale or "," in raw_match:
+        score += 6
+    if parsed_value < 100 and not unit and not scale:
+        score -= 12
+
+    tail = window[value_match.end(): value_match.end() + 1]
+    if tail in {"월", "月", "일", "日"}:
+        score -= 20
+
+    return score
+
+
+def _extract_year_value_pairs(
+    text: str,
+    target_years: List[str],
+    metric_tokens: List[str],
+) -> Dict[str, Dict[str, Any]]:
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    best_by_year: Dict[str, Dict[str, Any]] = {}
+
+    for idx, line in enumerate(lines):
+        window = " ".join(lines[max(0, idx - 1): min(len(lines), idx + 2)])
+        for year in target_years:
+            if year not in window:
+                continue
+
+            for match in _NUMERIC_VALUE_RE.finditer(window):
+                raw_value, scale, unit = match.groups()
+                if raw_value == year:
+                    continue
+
+                parsed_value = _parse_numeric_value(raw_value, scale)
+                if parsed_value is None:
+                    continue
+
+                score = _score_numeric_candidate(
+                    window=window,
+                    line=line,
+                    year=year,
+                    metric_tokens=metric_tokens,
+                    value_match=match,
+                    parsed_value=parsed_value,
+                    unit=unit,
+                    scale=scale,
+                )
+                candidate = {
+                    "value": parsed_value,
+                    "unit": unit,
+                    "score": score,
+                }
+                existing = best_by_year.get(year)
+                if not existing or candidate["score"] > existing["score"]:
+                    best_by_year[year] = candidate
+
+    return best_by_year
+
+
+def _build_numeric_comparison_answer(
+    base_year: str,
+    compare_year: str,
+    base_value: float,
+    compare_value: float,
+    unit: Optional[str] = None,
+    metric_label: Optional[str] = None,
+) -> str:
+    diff = compare_value - base_value
+    unit_suffix = unit or ""
+    subject = metric_label or "値"
+    base_text = _format_numeric_value(base_value)
+    compare_text = _format_numeric_value(compare_value)
+
+    if unit == "%":
+        point_gap = abs(diff)
+        return (
+            f"{base_year}年の{subject}は{base_text}%で、{compare_year}年は{compare_text}%です。"
+            f" 差は{_format_numeric_value(point_gap)}ポイントです。"
+        )
+
+    if diff > 0:
+        direction = "増加"
+    elif diff < 0:
+        direction = "減少"
+    else:
+        direction = "同じ"
+
+    answer = (
+        f"{base_year}年の{subject}は{base_text}{unit_suffix}で、"
+        f"{compare_year}年は{compare_text}{unit_suffix}です。"
+    )
+    if diff == 0:
+        return answer + " 差はありません。"
+
+    answer += f" 差は{_format_numeric_value(abs(diff))}{unit_suffix}で、{direction}しています。"
+    if base_value != 0:
+        change_rate = abs(diff) / abs(base_value) * 100
+        answer += f" 増減率は約{change_rate:.2f}%です。"
+    return answer
+
+
+def _extract_numeric_comparison_answer_from_docs(user_message: str, docs) -> Optional[str]:
+    """Extract year-specific numeric values from retrieved docs and calculate the gap."""
+    if not docs or not _is_numeric_comparison_query(user_message):
+        return None
+
+    target_years = _extract_distinct_years(user_message)
+    if len(target_years) < 2:
+        return None
+    target_years = sorted(target_years[:2])
+
+    combined = "\n".join(
+        _strip_enrichment_header(getattr(doc, "page_content", "") or "")
+        for doc in docs
+    )
+    if not combined.strip():
+        return None
+
+    metric_tokens = _extract_metric_tokens(user_message)
+    year_values = _extract_year_value_pairs(combined, target_years, metric_tokens)
+    if any(year not in year_values for year in target_years):
+        return None
+
+    base_year, compare_year = target_years
+    base_entry = year_values[base_year]
+    compare_entry = year_values[compare_year]
+    shared_unit = base_entry.get("unit") if base_entry.get("unit") == compare_entry.get("unit") else None
+    metric_label = _resolve_metric_label(user_message)
+
+    return _build_numeric_comparison_answer(
+        base_year=base_year,
+        compare_year=compare_year,
+        base_value=base_entry["value"],
+        compare_value=compare_entry["value"],
+        unit=shared_unit,
+        metric_label=metric_label,
+    )
 
 
 def _normalize_for_match(text: str) -> str:
@@ -1117,6 +1371,7 @@ def handle_chat(
         (scoped_source or scoped_doc_id)
         and (
             _needs_full_document_context(user_message)
+            or _is_numeric_comparison_query(user_message)
             or _should_force_small_doc_full_context(scoped_source, scoped_doc_id)
         )
     )
@@ -1284,6 +1539,22 @@ def handle_chat(
             resolved_active_doc_id = resolved_active_doc_id or first_source.get("doc_id")
         return {
             "answer": exact_date_answer,
+            "sources": sources,
+            "mode": "document_qa",
+            "active_source": resolved_active_source,
+            "active_doc_id": resolved_active_doc_id,
+        }
+
+    numeric_comparison_answer = _extract_numeric_comparison_answer_from_docs(user_message, docs)
+    if numeric_comparison_answer:
+        resolved_active_source = scoped_source or active_source
+        resolved_active_doc_id = scoped_doc_id or active_doc_id
+        if (not resolved_active_source or not resolved_active_doc_id) and sources:
+            first_source = sources[0] or {}
+            resolved_active_source = resolved_active_source or first_source.get("source")
+            resolved_active_doc_id = resolved_active_doc_id or first_source.get("doc_id")
+        return {
+            "answer": numeric_comparison_answer,
             "sources": sources,
             "mode": "document_qa",
             "active_source": resolved_active_source,
