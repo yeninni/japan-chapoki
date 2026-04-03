@@ -28,12 +28,12 @@ from app.config import (
 )
 
 logger = logging.getLogger("tilon.chat")
-_HANGUL_RE = re.compile(r"[가-힣]")
+_HANGUL_RE = re.compile(r"[\uac00-\ud7a3]")
 _JAPANESE_RE = re.compile(r"[\u3040-\u30ff\u31f0-\u31ff]")
 _CJK_HAN_RE = re.compile(r"[\u4e00-\u9fff]")
 _CJK_PUNCT_RE = re.compile(r"[，。！？；：、﹐﹒﹔﹕「」『』【】《》〈〉（）〔〕］［]")
-_SIMPLIFIED_CHINESE_RE = re.compile(
-    r"(这是|请用|无法|没有)|[这们为说开点实观见将让还吗应没]"
+_NON_JAPANESE_CJK_RE = re.compile(
+    r"(\u8fd9\u662f|\u8bf7\u7528|\u65e0\u6cd5|\u6ca1\u6709)|[\u8fd9\u4eec\u4e3a\u8bf4\u5f00\u70b9\u5b9e\u89c2\u89c1\u5c06\u8ba9\u8fd8\u5417\u5e94\u6ca1]"
 )
 _SCOPED_FULL_CONTEXT_RETRY_MAX_CHUNKS = 12
 _DATE_RANGE_RE = re.compile(
@@ -46,27 +46,36 @@ _YEAR_RE = re.compile(r"\b((?:19|20)\d{2})\b")
 _NUMERIC_VALUE_RE = re.compile(
     r"(?<![\d.])"
     r"(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)"
-    r"(?:\s*(억|万|만|천|千|백|百))?"
-    r"(?:\s*(명|人|원|円|개|件|건|세대|%|퍼센트))?"
+    r"(?:\s*(万|千|百))?"
+    r"(?:\s*(人|円|件|%))?"
     r"(?!\d)"
 )
 _NUMERIC_COMPARISON_KEYWORDS = [
-    "차이", "차이점", "비교", "증가", "감소", "증감", "변화", "전년", "대비",
-    "얼마나", "difference", "compare", "comparison", "increase", "decrease",
-    "change", "delta", "人口", "인구", "population",
+    "差", "比較", "増加", "減少", "増減", "変化", "前年比", "どれくらい",
+    "difference", "compare", "comparison", "increase", "decrease",
+    "change", "delta", "人口", "population",
 ]
 _NUMERIC_QUERY_STOPWORDS = {
-    "자료", "문서", "파일", "보고서", "수치", "숫자", "값", "년도", "연도", "년", "자료랑",
-    "나와있는", "있는", "에서", "이랑", "와", "과", "의", "를", "을", "은", "는", "이", "가",
-    "차이", "차이점", "비교", "증가", "감소", "증감", "변화", "계산", "계산해", "계산하고싶을",
+    "資料", "文書", "ファイル", "レポート", "数値", "数字", "値", "年度", "年", "資料内",
+    "記載", "ある", "で", "と", "の", "を", "は", "が",
+    "差", "比較", "増加", "減少", "増減", "変化", "計算", "計算して",
     "difference", "compare", "comparison", "increase", "decrease", "change",
     "between", "from", "to", "and", "with", "value", "values", "year", "years",
     "資料", "文書", "ファイル", "数値", "数字", "値", "差", "比較", "増加", "減少", "変化",
 }
 _NUMERIC_METRIC_ALIASES = {
-    "人口": {"인구", "人口", "population"},
-    "売上": {"매출", "売上", "sales", "revenue"},
+    "人口": {"人口", "population"},
+    "売上": {"売上", "sales", "revenue"},
 }
+_CAUSAL_QUESTION_KEYWORDS = [
+    "なぜ", "どうして", "理由", "原因", "要因", "背景",
+    "why", "reason", "cause", "factor", "background",
+]
+_CAUSAL_EVIDENCE_HINTS = [
+    "理由", "原因", "要因", "背景", "ため", "ために", "ことから", "によって",
+    "により", "影響", "起因", "を受け", "要因として", "原因として",
+    "because", "due to", "driven by", "led to", "resulted from",
+]
 
 
 def _needs_full_document_context(text: str) -> bool:
@@ -77,8 +86,8 @@ def _needs_full_document_context(text: str) -> bool:
     """
     lower = text.lower().strip()
     indicators = [
-        "요약", "요약해", "정리", "정리해", "전체", "전반", "구조", "목차",
-        "분석", "분석해", "핵심", "주요 내용", "전체 내용", "섹션", "section",
+        "要約", "まとめて", "全体", "全般", "構造", "目次",
+        "分析", "分析して", "要点", "主要内容", "全体内容", "セクション", "section",
         "structure", "outline", "overview", "summarize", "summary",
         "analyze", "analysis", "key points", "main points", "extract key",
         "extract data", "important information", "important info",
@@ -92,7 +101,7 @@ def _is_smalltalk_query(text: str) -> bool:
     """Detect greetings/acknowledgements that should bypass document scoping."""
     lower = text.lower().strip()
     indicators = [
-        "안녕", "고마워", "감사", "오케이", "알겠", "응", "네",
+        "こんにちは", "ありがとう", "了解", "オーケー",
         "hello", "hi", "thanks", "thank you", "okay", "ok", "got it",
     ]
     return any(keyword in lower for keyword in indicators)
@@ -102,13 +111,13 @@ def _is_document_intent_query(text: str) -> bool:
     """Heuristic: whether the user is likely asking about uploaded documents."""
     lower = (text or "").lower().strip()
     indicators = [
-        "문서", "파일", "첨부", "업로드", "pdf", "페이지", "쪽", "본문", "원문",
-        "가사", "근거", "출처", "해당 문서", "이 문서", "이 파일", "그 문서", "그 파일",
+        "文書", "ファイル", "添付", "アップロード", "pdf", "ページ", "本文", "原文",
+        "根拠", "出典", "この文書", "このファイル", "その文書", "そのファイル",
         "document", "file", "attachment", "uploaded", "upload", "pdf", "page",
         "section", "paragraph", "table", "figure", "source", "quote", "lyrics",
     ]
     followup_hints = [
-        "그 부분", "위 내용", "방금 내용", "그거", "거기", "다시", "이어", "계속",
+        "その部分", "上の内容", "さっきの内容", "それ", "そこ", "もう一度", "続けて", "続き",
     ]
 
     if any(keyword in lower for keyword in indicators):
@@ -128,15 +137,15 @@ def _is_scope_followup_query(text: str) -> bool:
         return False
 
     hints = [
-        "그 부분", "그 내용", "위 내용", "방금", "앞에서", "이어서", "계속", "다시",
-        "그거", "거기", "그 다음", "다음 조항", "다음 항목", "해당 내용", "그 문장",
-        "이 부분", "이 내용", "이 조항", "몇 페이지", "어느 페이지",
+        "その部分", "その内容", "上の内容", "さっき", "前に", "続けて", "続き", "もう一度",
+        "それ", "そこ", "次", "次の条項", "次の項目", "該当内容", "その文",
+        "この部分", "この内容", "この条項", "何ページ", "どのページ",
     ]
     if any(hint in lower for hint in hints):
         return True
 
     # Short continuation-style queries are often follow-ups.
-    if len(lower) <= 40 and any(token in lower for token in ["다시", "이어", "계속", "그거", "거기", "해당"]):
+    if len(lower) <= 40 and any(token in lower for token in ["もう一度", "続けて", "続き", "それ", "そこ", "該当"]):
         return True
 
     return False
@@ -146,8 +155,8 @@ def _is_scope_reset_query(text: str) -> bool:
     """Detect explicit intent to stop document-scoped conversation."""
     lower = (text or "").lower().strip()
     indicators = [
-        "문서 말고", "파일 말고", "업로드 말고", "일반 대화", "새 주제", "주제 바꿔",
-        "이제 다른 질문", "그거 말고", "문서와 상관없이",
+        "文書ではなく", "ファイルではなく", "アップロードではなく", "一般会話", "新しい話題", "話題を変えて",
+        "別の質問", "それではなく", "文書と関係なく",
     ]
     return any(keyword in lower for keyword in indicators)
 
@@ -168,8 +177,6 @@ def _is_direct_extraction_query(text: str) -> bool:
     """Detect requests that want raw OCR/text output from the uploaded file."""
     lower = text.lower().strip()
     indicators = [
-        "텍스트 추출", "문자 추출", "글자 추출", "읽어줘", "텍스트만", "원문", "ocr",
-        "모든 텍스트", "전체 텍스트", "텍스트 다", "다 뽑", "전문",
         "テキスト抽出", "文字抽出", "文字だけ", "テキストだけ", "原文", "読んで",
         "読み取って", "抽出して", "全文", "全部のテキスト", "画像の文字",
         "what does this image say", "what does the image say",
@@ -184,10 +191,91 @@ def _is_date_fact_query(text: str) -> bool:
     lower = (text or "").lower().strip()
     indicators = [
         "いつ", "何日", "何日から", "何日まで", "会期", "開催日", "開催期間", "日程", "期間",
-        "날짜", "언제", "기간", "개최", "며칠",
         "when", "date", "dates", "period", "schedule",
     ]
     return any(keyword in lower for keyword in indicators)
+
+
+def _is_causal_question(text: str) -> bool:
+    """Detect questions asking for reasons, causes, or contributing factors."""
+    lower = (text or "").lower().strip()
+    return any(keyword in lower for keyword in _CAUSAL_QUESTION_KEYWORDS)
+
+
+def _extract_causal_subject(text: str) -> Optional[str]:
+    """Best-effort extraction of the phenomenon being asked about."""
+    raw = re.sub(r"\s+", " ", text or "").strip()
+    raw = re.sub(r"[?？!！。．]+$", "", raw)
+    patterns = [
+        r"^(.*?)が(?:なぜ|どうして)",
+        r"^(.*?)は(?:なぜ|どうして)",
+        r"^(.*?)(?:の)?(?:理由|原因|要因|背景)は",
+        r"^(.*?)(?:の)?(?:理由|原因|要因|背景)を",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, raw)
+        if match:
+            subject = match.group(1).strip(" 「」『』()（）")
+            if subject:
+                return subject
+    return None
+
+
+def _has_explicit_causal_evidence(text: str) -> bool:
+    """Return True when the retrieved text explicitly frames causes or factors."""
+    sample = text or ""
+    return any(token in sample for token in _CAUSAL_EVIDENCE_HINTS)
+
+
+def _build_cautious_causal_answer(user_message: str) -> str:
+    """Return a conservative answer when the document does not state a cause."""
+    subject = _extract_causal_subject(user_message)
+    if subject:
+        if "増加" in user_message:
+            return (
+                f"{subject}が増加していることから、"
+                "関連する要素が影響している可能性はありますが、"
+                "具体的な原因については資料からは判断できません。"
+            )
+        elif "減少" in user_message:
+            return (
+                f"{subject}が減少していることから、"
+                "関連する要素が影響している可能性はありますが、"
+                "具体的な原因については資料からは判断できません。"
+            )
+        elif "変化" in user_message:
+            return (
+                f"{subject}が変化していることから、"
+                "関連する要素が影響している可能性はありますが、"
+                "具体的な原因については資料からは判断できません。"
+            )
+        return (
+            f"{subject}に関連する記載は確認できますが、"
+            "具体的な理由や要因については資料からは判断できません。"
+        )
+
+    return (
+        "ご質問の事象に関連する記載は確認できますが、"
+        "具体的な原因については資料からは判断できません。"
+    )
+
+
+def _extract_cautious_causal_answer_from_docs(user_message: str, docs) -> Optional[str]:
+    """Return a safe non-causal answer when causes are not explicitly stated."""
+    if not docs or not _is_causal_question(user_message):
+        return None
+
+    combined = "\n".join(
+        _strip_enrichment_header(getattr(doc, "page_content", "") or "")
+        for doc in docs
+    )
+    if not combined.strip():
+        return None
+
+    if _has_explicit_causal_evidence(combined):
+        return None
+
+    return _build_cautious_causal_answer(user_message)
 
 
 def _normalize_date_text(text: str) -> str:
@@ -272,12 +360,8 @@ def _parse_numeric_value(raw: str, scale: Optional[str]) -> Optional[float]:
         return None
 
     multiplier = {
-        "억": 100_000_000,
         "万": 10_000,
-        "만": 10_000,
-        "천": 1_000,
         "千": 1_000,
-        "백": 100,
         "百": 100,
     }.get(scale or "", 1)
     return value * multiplier
@@ -321,7 +405,7 @@ def _score_numeric_candidate(
         score -= 12
 
     tail = window[value_match.end(): value_match.end() + 1]
-    if tail in {"월", "月", "일", "日"}:
+    if tail in {"月", "日"}:
         score -= 20
 
     return score
@@ -454,7 +538,7 @@ def _extract_numeric_comparison_answer_from_docs(user_message: str, docs) -> Opt
 
 def _normalize_for_match(text: str) -> str:
     text = (text or "").lower()
-    text = re.sub(r"[^0-9a-z가-힣\u3040-\u30ff\u31f0-\u31ff\u4e00-\u9fff\s]", " ", text)
+    text = re.sub(r"[^0-9a-z\uac00-\ud7a3\u3040-\u30ff\u31f0-\u31ff\u4e00-\u9fff\s]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
@@ -650,7 +734,7 @@ def _looks_unreliable_extracted_text(text: str, user_message: str = "") -> bool:
     if _looks_garbled_output(sample):
         return True
 
-    meaningful_chars = len(re.findall(r"[가-힣A-Za-z0-9\u3040-\u30ff\u31f0-\u31ff\u4e00-\u9fff]", sample))
+    meaningful_chars = len(re.findall(r"[\uac00-\ud7a3A-Za-z0-9\u3040-\u30ff\u31f0-\u31ff\u4e00-\u9fff]", sample))
     if meaningful_chars < 12:
         return True
 
@@ -802,14 +886,16 @@ _SYSTEM_PROMPT = """You are Tilon AI, a strict document-based chatbot.
 
 CRITICAL RULES:
 1. Respond ONLY in natural Japanese.
-2. Never output Korean.
-3. Never output Chinese text or Chinese-only phrasing. Japanese kanji are allowed only as part of natural Japanese sentences.
+2. Never output non-Japanese text.
+3. Never output non-Japanese CJK phrasing. Japanese kanji are allowed only as part of natural Japanese sentences.
 4. Answer ONLY from the retrieved document context. Do not use general knowledge, prior assumptions, or web knowledge.
 5. If the retrieved document context is missing, weak, unrelated, or insufficient, say you do not know in Japanese.
 6. Never guess, summarize from memory, or fill gaps with plausible information.
-7. Do not mention source names, file names, page numbers, citations, references, or evidence labels unless the user explicitly asks for them.
-8. Keep paragraphs clean. Do not produce broken line fragments or punctuation-only lines.
-9. Do NOT use markdown emphasis symbols in the final answer (forbidden: **, __). Output plain text only."""
+7. If the user asks for a reason, cause, factor, or background, do not infer causality unless the document explicitly states it.
+8. If the document shows a result or change but does not explicitly state its cause, say that the cause cannot be determined from the document.
+9. Do not mention source names, file names, page numbers, citations, references, or evidence labels unless the user explicitly asks for them.
+10. Keep paragraphs clean. Do not produce broken line fragments or punctuation-only lines.
+11. Do NOT use markdown emphasis symbols in the final answer (forbidden: **, __). Output plain text only."""
 
 
 def _build_prompt(
@@ -840,7 +926,7 @@ def _build_prompt(
     return "\n\n".join(parts)
 
 
-def _contains_chinese_chars(text: str) -> bool:
+def _contains_han_chars(text: str) -> bool:
     """Return True when any CJK Han character exists."""
     return bool(_CJK_HAN_RE.search(text or ""))
 
@@ -851,7 +937,7 @@ def _contains_cjk_punctuation(text: str) -> bool:
 
 
 def _normalize_cjk_punctuation(text: str) -> str:
-    """Normalize CJK punctuation into ASCII punctuation for clean Korean output."""
+    """Normalize CJK punctuation into ASCII punctuation for cleaner output."""
     if not text:
         return text
     table = str.maketrans({
@@ -877,7 +963,7 @@ def _looks_garbled_output(answer: str) -> bool:
     noisy_lines = 0
     for ln in lines:
         # Lines with mostly punctuation and almost no meaningful letters/numbers.
-        meaningful = len(re.findall(r"[가-힣A-Za-z0-9\u3040-\u30ff\u31f0-\u31ff\u4e00-\u9fff]", ln))
+        meaningful = len(re.findall(r"[\uac00-\ud7a3A-Za-z0-9\u3040-\u30ff\u31f0-\u31ff\u4e00-\u9fff]", ln))
         has_cjk_punct = bool(_CJK_PUNCT_RE.search(ln))
         if has_cjk_punct and meaningful <= 1:
             noisy_lines += 1
@@ -966,8 +1052,8 @@ def _strip_source_reference_lines(text: str) -> str:
     return cleaned.strip()
 
 
-def _expects_korean_output(user_message: str) -> bool:
-    """Treat messages containing Hangul as Korean-mode conversations."""
+def _contains_hangul(user_message: str) -> bool:
+    """Detect whether the user message contains Hangul."""
     return bool(_HANGUL_RE.search(user_message or ""))
 
 
@@ -984,7 +1070,7 @@ def _expected_output_language(user_message: str) -> str:
 def _looks_non_japanese_cjk_output(text: str) -> bool:
     """Detect CJK-heavy output that does not read like natural Japanese."""
     sample = _normalize_answer_layout(text or "")
-    meaningful = len(re.findall(r"[A-Za-z0-9가-힣\u3040-\u30ff\u31f0-\u31ff\u4e00-\u9fff]", sample))
+    meaningful = len(re.findall(r"[A-Za-z0-9\uac00-\ud7a3\u3040-\u30ff\u31f0-\u31ff\u4e00-\u9fff]", sample))
     kana_count = len(_JAPANESE_RE.findall(sample))
     han_count = len(_CJK_HAN_RE.findall(sample))
     hangul_count = len(_HANGUL_RE.findall(sample))
@@ -993,7 +1079,7 @@ def _looks_non_japanese_cjk_output(text: str) -> bool:
     if hangul_count > 0:
         return True
 
-    if _SIMPLIFIED_CHINESE_RE.search(sample):
+    if _NON_JAPANESE_CJK_RE.search(sample):
         return True
 
     if meaningful >= 8 and han_count >= 3 and kana_count == 0:
@@ -1013,7 +1099,7 @@ def _is_acceptable_japanese_output(text: str) -> bool:
     sample = _normalize_answer_layout(_strip_markdown_emphasis(text or ""))
     if not sample:
         return False
-    if _SIMPLIFIED_CHINESE_RE.search(sample):
+    if _NON_JAPANESE_CJK_RE.search(sample):
         return False
     if _looks_garbled_output(sample):
         return False
@@ -1035,8 +1121,8 @@ def _is_acceptable_japanese_output(text: str) -> bool:
 def _needs_language_rewrite(user_message: str, answer: str) -> bool:
     """
     Rewrite when:
-    1) Chinese chars/punctuation exist, or
-    2) User wrote in Korean but answer is effectively non-Korean, or
+    1) non-Japanese CJK markers exist, or
+    2) output is not acceptable Japanese, or
     3) Output looks garbled/noisy.
     """
     if not answer:
@@ -1048,7 +1134,7 @@ def _needs_language_rewrite(user_message: str, answer: str) -> bool:
         return True
 
     if expected_lang == "ja":
-        if _contains_chinese_chars(answer) and _looks_non_japanese_cjk_output(answer):
+        if _contains_han_chars(answer) and _looks_non_japanese_cjk_output(answer):
             return True
         if _contains_cjk_punctuation(answer) and _looks_garbled_output(answer):
             return True
@@ -1065,9 +1151,8 @@ You are a strict editor.
 Respond ONLY in natural Japanese.
 Every non-trivial sentence must read like native Japanese and should use hiragana/katakana where appropriate.
 ABSOLUTE RULES:
-- Do not output Korean.
-- Do not output Chinese text or Chinese-only phrasing.
-- If Chinese text exists in the draft, translate/paraphrase it into natural Japanese.
+- Do not output non-Japanese text.
+- If non-Japanese CJK text exists in the draft, translate/paraphrase it into natural Japanese.
 - Remove source names, file names, page numbers, citation labels, and reference sections unless the user explicitly asked for them.
 - Remove broken line wraps and punctuation-only fragments.
 Preserve facts, order, and citations from the draft answer.
@@ -1096,8 +1181,7 @@ def _translate_to_target_language_fallback(answer: str, model: str, target_langu
     prompt = f"""[System]
 Translate the draft answer into natural {target_language}.
 Output only Japanese.
-Do not output Korean.
-Do not output Chinese text or Chinese-only phrasing.
+Do not output non-Japanese text.
 Remove broken line wraps.
 Preserve meaning and important details.
 
@@ -1111,8 +1195,8 @@ Preserve meaning and important details.
 def _apply_language_guard(user_message: str, answer: str, model: str) -> str:
     """
     Hard guard:
-    - Never allow Chinese characters.
-    - Enforce the user's language when it is clearly detectable.
+    - Never allow non-Japanese CJK output.
+    - Enforce stable Japanese output.
     """
     expected_lang = _expected_output_language(user_message)
     expect_japanese = expected_lang == "ja"
@@ -1129,12 +1213,12 @@ def _apply_language_guard(user_message: str, answer: str, model: str) -> str:
             candidate = rewritten
             candidate = _normalize_answer_layout(candidate)
 
-            no_chinese = not _looks_non_japanese_cjk_output(candidate)
+            cjk_is_clean = not _looks_non_japanese_cjk_output(candidate)
             no_cjk_punct = not _looks_garbled_output(candidate)
             has_japanese = _is_acceptable_japanese_output(candidate)
             not_garbled = not _looks_garbled_output(candidate)
             if (
-                no_chinese
+                cjk_is_clean
                 and no_cjk_punct
                 and not_garbled
                 and (not expect_japanese or has_japanese)
@@ -1144,7 +1228,7 @@ def _apply_language_guard(user_message: str, answer: str, model: str) -> str:
     except Exception as e:
         logger.warning("Strict language guard rewrite failed: %s", e)
 
-    # Remove any remaining Chinese chars first and normalize punctuation noise.
+    # Normalize any remaining non-Japanese CJK noise first.
     stripped = _normalize_answer_layout(candidate or "")
     stripped = re.sub(r"[ 	]{2,}", " ", stripped)
     stripped = re.sub(r"\n{3,}", "\n\n", stripped).strip()
@@ -1188,7 +1272,7 @@ def _apply_language_guard(user_message: str, answer: str, model: str) -> str:
 def _has_token_repetition_loop(answer: str) -> bool:
     """
     Detect degenerate repetitive answers like:
-    "대학원생 대학원생 대학원생 ..."
+    "student student student ..."
     """
     tokens = [t for t in re.split(r"\s+", (answer or "").strip()) if t]
     if len(tokens) < 20:
@@ -1561,12 +1645,41 @@ def handle_chat(
             "active_doc_id": resolved_active_doc_id,
         }
 
+    cautious_causal_answer = _extract_cautious_causal_answer_from_docs(user_message, docs)
+    if cautious_causal_answer:
+        resolved_active_source = scoped_source or active_source
+        resolved_active_doc_id = scoped_doc_id or active_doc_id
+        if (not resolved_active_source or not resolved_active_doc_id) and sources:
+            first_source = sources[0] or {}
+            resolved_active_source = resolved_active_source or first_source.get("source")
+            resolved_active_doc_id = resolved_active_doc_id or first_source.get("doc_id")
+        return {
+            "answer": cautious_causal_answer,
+            "sources": sources,
+            "mode": "document_qa",
+            "active_source": resolved_active_source,
+            "active_doc_id": resolved_active_doc_id,
+        }
+
     # ── Step 2: Build prompt with retrieved document evidence only ──
+    effective_system_prompt = (system_prompt or "").strip()
+    if _is_causal_question(user_message):
+        causal_guard = (
+            "If the user asks for a reason, cause, factor, or background, "
+            "do not infer causality unless it is explicitly stated in the retrieved document context. "
+            "If the cause is not explicit, say that it cannot be determined from the document."
+        )
+        effective_system_prompt = (
+            f"{effective_system_prompt}\n\n{causal_guard}".strip()
+            if effective_system_prompt
+            else causal_guard
+        )
+
     prompt = _build_prompt(
         user_message=user_message,
         history=history,
         doc_context=doc_context,
-        system_prompt=system_prompt,
+        system_prompt=effective_system_prompt,
     )
 
     result = call_ollama(prompt, model=selected_model)
