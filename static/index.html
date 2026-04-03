@@ -263,7 +263,7 @@
     const MAX_SHELF_FILES = 90;
     const HISTORY_MAX_MESSAGES = 12;
 
-    const DEFAULT_SYSTEM_PROMPT = 'あなたはTilon AIです。日本語で親切かつ明確に回答してください。中国語(漢字)は絶対に使用しないでください。';
+    const DEFAULT_SYSTEM_PROMPT = 'あなたはTilon AIです。必ず自然な日本語だけで回答してください。中国語や韓国語は出力しないでください。改行は必要な段落だけに使い、壊れた行分割はしないでください。';
 
     let currentUser = null;
     let isLoading = false;
@@ -479,7 +479,14 @@
 
     function newChat() {
         const id = 'c_' + Date.now();
-        chats.unshift({ id, title: '新しいチャット', active_source: null, active_doc_id: null, messages: [] });
+        const onlyDoc = uploadedDocs.length === 1 ? uploadedDocs[0] : null;
+        chats.unshift({
+            id,
+            title: '新しいチャット',
+            active_source: onlyDoc ? (onlyDoc.source || null) : null,
+            active_doc_id: onlyDoc ? (onlyDoc.doc_id || null) : null,
+            messages: []
+        });
         saveChats();
         renderChatList();
         loadChat(id);
@@ -553,17 +560,32 @@
     }
 
     function renderScopeBanner() {
-        // Single-document scope UI is disabled: always use the uploaded-files scope.
-        return;
+        const hdr = document.getElementById('hdr-title');
+        const chat = currentChat();
+        if (!hdr || !chat) return;
+
+        const baseTitle = chat.title || '新しいチャット';
+        const scopedLabel = chat.active_source ? ` | 文書固定: ${chat.active_source}` : '';
+        hdr.textContent = baseTitle + scopedLabel;
     }
 
     function setActiveDocument(source, docId, silent) {
-        // Single-document scope is intentionally disabled.
-        return;
+        const chat = ensureCurrentChat();
+        if (!chat) return;
+        chat.active_source = source || null;
+        chat.active_doc_id = docId || null;
+        saveChats();
+        renderChatList();
+        renderScopeBanner();
+        renderShelfDocs();
+        if (!silent) {
+            if (chat.active_source) toast(`📌 "${chat.active_source}" に固定しました`);
+            else toast('文書固定を解除しました');
+        }
     }
 
     function clearActiveScope() {
-        return;
+        setActiveDocument(null, null, false);
     }
 
     function openShelfUpload() {
@@ -642,7 +664,12 @@
             nameBtn.className = 'shelf-item-name';
             nameBtn.textContent = doc.source;
             nameBtn.title = doc.source;
-            nameBtn.onclick = () => toast('アップロードされたすべてのファイルを基準に回答します。');
+            const isActive = !!(currentChat() && (
+                (doc.doc_id && currentChat().active_doc_id === doc.doc_id) ||
+                (!doc.doc_id && currentChat().active_source === doc.source)
+            ));
+            if (isActive) nameBtn.classList.add('active');
+            nameBtn.onclick = () => selectShelfDoc(doc.source, doc.doc_id);
 
             const delBtn = document.createElement('button');
             delBtn.type = 'button';
@@ -666,7 +693,7 @@
     }
 
     function selectShelfDoc(source, docId) {
-        return;
+        setActiveDocument(source, docId, false);
     }
 
     async function deleteShelfDoc(doc) {
@@ -733,7 +760,8 @@
                 found.chunks += 1;
             });
 
-            Array.from(grouped.values()).forEach(upsertDoc);
+            uploadedDocs = Array.from(grouped.values()).sort((a, b) => String(a.source).localeCompare(String(b.source), 'ja'));
+            saveDocs();
             renderShelfDocs();
         } catch {}
     }
@@ -816,6 +844,7 @@
                         activeChat.active_source = doc.source || null;
                         activeChat.active_doc_id = doc.doc_id || null;
                         saveChats();
+                        renderScopeBanner();
                     }
 
                     ok += 1;
@@ -903,6 +932,12 @@
     function shouldUseUploadScope(chat, text) {
         if (!uploadedDocs.length) return false;
         if (isGeneralChatOverride(text)) return false;
+        if (chat && (chat.active_source || chat.active_doc_id)) return true;
+        if (uploadedDocs.length === 1) {
+            const onlyDoc = uploadedDocs[0];
+            if (onlyDoc) setActiveDocument(onlyDoc.source || null, onlyDoc.doc_id || null, true);
+            return true;
+        }
         return true;
     }
 

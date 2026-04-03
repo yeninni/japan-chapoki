@@ -15,7 +15,7 @@ from langchain_core.documents import Document
 
 logger = logging.getLogger("tilon.keyword_index")
 
-_TOKEN_RE = re.compile(r"[A-Za-z0-9._-]+|[가-힣]+")
+_TOKEN_RE = re.compile(r"[A-Za-z0-9._-]+|[가-힣]+|[ぁ-んァ-ヶー一-龯々]+")
 _KOREAN_PARTICLE_SUFFIXES = (
     "으로부터", "에서부터", "에게서는", "한테서는", "으로는", "에게서", "한테서",
     "이라도", "라도", "이라는", "라는", "이라고", "라고", "이랑", "랑", "으로", "에서",
@@ -23,6 +23,57 @@ _KOREAN_PARTICLE_SUFFIXES = (
     "처럼", "보다", "마저", "조차", "밖에", "마다", "하고", "이며", "이고", "이다",
     "와", "과", "은", "는", "이", "가", "을", "를", "에", "의", "도", "만", "로",
 )
+_JAPANESE_PARTICLE_SUFFIXES = (
+    "について", "における", "に関する", "のため", "として", "から", "まで",
+    "より", "とは", "では", "には", "へ", "で", "に", "を", "が", "は", "も",
+    "や", "の", "と", "か", "だ", "です",
+)
+
+
+def _katakana_without_long_vowel(token: str) -> str:
+    """Normalize katakana long-vowel variants to improve fuzzy exact matching."""
+    if "ー" not in token:
+        return token
+    collapsed = re.sub(r"ー+", "", token)
+    return collapsed if len(collapsed) >= 2 else token
+
+
+def _expand_japanese_token(token: str) -> Iterable[str]:
+    lowered = token.lower()
+    yield lowered
+
+    collapsed = _katakana_without_long_vowel(lowered)
+    if collapsed != lowered:
+        yield collapsed
+
+    if not re.fullmatch(r"[ぁ-んァ-ヶー一-龯々]+", lowered):
+        return
+
+    seen = {lowered, collapsed}
+
+    for suffix in _JAPANESE_PARTICLE_SUFFIXES:
+        for candidate in list(seen):
+            if not candidate.endswith(suffix):
+                continue
+            stem = candidate[:-len(suffix)]
+            if len(stem) < 2 or stem in seen:
+                continue
+            seen.add(stem)
+            yield stem
+
+    # Japanese text often has no whitespace, so index overlapping bi/tri-grams.
+    for candidate in list(seen):
+        normalized = _katakana_without_long_vowel(candidate)
+        if len(normalized) >= 2:
+            for size in (2, 3):
+                if len(normalized) < size:
+                    continue
+                for idx in range(len(normalized) - size + 1):
+                    gram = normalized[idx: idx + size]
+                    if gram in seen:
+                        continue
+                    seen.add(gram)
+                    yield gram
 
 
 def _expand_korean_token(token: str) -> Iterable[str]:
@@ -53,10 +104,15 @@ def _expand_korean_token(token: str) -> Iterable[str]:
 
 
 def tokenize_text(text: str) -> List[str]:
-    """Tokenize Korean/English technical text while preserving codes like E-401."""
+    """Tokenize Korean/English/Japanese text while preserving codes like E-401."""
     tokens: List[str] = []
     for raw_token in _TOKEN_RE.findall(text or ""):
-        tokens.extend(_expand_korean_token(raw_token))
+        if re.fullmatch(r"[가-힣]+", raw_token):
+            tokens.extend(_expand_korean_token(raw_token))
+        elif re.fullmatch(r"[ぁ-んァ-ヶー一-龯々]+", raw_token):
+            tokens.extend(_expand_japanese_token(raw_token))
+        else:
+            tokens.append(raw_token.lower())
     return tokens
 
 
