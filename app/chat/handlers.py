@@ -52,8 +52,9 @@ _NUMERIC_VALUE_RE = re.compile(
 )
 _NUMERIC_COMPARISON_KEYWORDS = [
     "差", "比較", "増加", "減少", "増減", "変化", "前年比", "どれくらい",
+    "何倍", "何割", "増加率", "減少率", "増減率", "割合", "パーセント",
     "difference", "compare", "comparison", "increase", "decrease",
-    "change", "delta", "人口", "population",
+    "change", "delta", "ratio", "percent", "multiple", "人口", "population",
 ]
 _NUMERIC_QUERY_STOPWORDS = {
     "資料", "文書", "ファイル", "レポート", "数値", "数字", "値", "年度", "年", "資料内",
@@ -67,6 +68,10 @@ _NUMERIC_METRIC_ALIASES = {
     "人口": {"人口", "population"},
     "売上": {"売上", "sales", "revenue"},
 }
+_ARITHMETIC_INVERSE_HINTS = [
+    "増加", "減少", "増え", "減り", "上がり", "下がり",
+    "増", "減", "多く", "少なく", "元は", "もともと", "だった場合", "場合",
+]
 _CAUSAL_QUESTION_KEYWORDS = [
     "なぜ", "どうして", "理由", "原因", "要因", "背景",
     "why", "reason", "cause", "factor", "background",
@@ -322,13 +327,45 @@ def _extract_distinct_years(text: str) -> List[str]:
     return years
 
 
+def _is_inverse_numeric_question(text: str) -> bool:
+    """Detect simple inverse arithmetic questions like 'X increased by Y, so what was last year?'"""
+    raw = text or ""
+    return any(token in raw for token in _ARITHMETIC_INVERSE_HINTS) and any(
+        token in raw for token in ["何人", "何件", "いくつ", "いくら", "何万人", "何名"]
+    )
+
+
 def _is_numeric_comparison_query(text: str) -> bool:
     """Detect year-over-year numeric comparison questions."""
     lower = (text or "").lower().strip()
     years = _extract_distinct_years(lower)
-    if len(years) < 2:
-        return False
-    return any(keyword in lower for keyword in _NUMERIC_COMPARISON_KEYWORDS)
+    if len(years) >= 2 and any(keyword in lower for keyword in _NUMERIC_COMPARISON_KEYWORDS):
+        return True
+    return any(keyword in lower for keyword in ["何倍", "何割", "増加率", "減少率", "増減率", "割合", "パーセント", "ratio", "percent", "multiple"])
+
+
+def _numeric_question_mode(text: str) -> str:
+    """Classify numeric questions to keep answers short and direct."""
+    raw = text or ""
+    lower = raw.lower()
+
+    if "何倍" in raw or "multiple" in lower:
+        return "multiple"
+    if "何割" in raw:
+        return "wari"
+    if (
+        "増加率" in raw
+        or "減少率" in raw
+        or "増減率" in raw
+        or "割合" in raw
+        or "パーセント" in raw
+        or "%" in raw
+        or "percent" in lower
+    ):
+        return "percent"
+    if "差" in raw or "difference" in lower or "delta" in lower:
+        return "difference"
+    return "summary"
 
 
 def _extract_metric_tokens(text: str) -> List[str]:
@@ -457,6 +494,7 @@ def _extract_year_value_pairs(
 
 
 def _build_numeric_comparison_answer(
+    user_message: str,
     base_year: str,
     compare_year: str,
     base_value: float,
@@ -469,32 +507,61 @@ def _build_numeric_comparison_answer(
     subject = metric_label or "値"
     base_text = _format_numeric_value(base_value)
     compare_text = _format_numeric_value(compare_value)
+    mode = _numeric_question_mode(user_message)
 
     if unit == "%":
         point_gap = abs(diff)
-        return (
-            f"{base_year}年の{subject}は{base_text}%で、{compare_year}年は{compare_text}%です。"
-            f" 差は{_format_numeric_value(point_gap)}ポイントです。"
-        )
+        if mode == "difference":
+            return f"差は{_format_numeric_value(point_gap)}ポイントです。"
+        return f"{compare_year}年は{compare_text}%で、{base_year}年比{_format_numeric_value(point_gap)}ポイント差です。"
 
     if diff > 0:
         direction = "増加"
+        short_direction = "増"
     elif diff < 0:
         direction = "減少"
+        short_direction = "減"
     else:
         direction = "同じ"
+        short_direction = ""
+
+    if mode == "multiple":
+        if base_value == 0:
+            return "比較元の値が0のため、倍率は算出できません。"
+        multiple = compare_value / base_value
+        return f"{compare_year}年は{base_year}年の約{_format_numeric_value(multiple)}倍です。"
+
+    if mode == "wari":
+        if base_value == 0:
+            return "比較元の値が0のため、割合は算出できません。"
+        if diff == 0:
+            return "増減はありません。"
+        wari = abs(diff) / abs(base_value) * 10
+        return f"約{_format_numeric_value(wari)}割{short_direction}です。"
+
+    if mode == "percent":
+        if base_value == 0:
+            return "比較元の値が0のため、増減率は算出できません。"
+        if diff == 0:
+            return "増減率は0%です。"
+        change_rate = abs(diff) / abs(base_value) * 100
+        return f"約{_format_numeric_value(change_rate)}%{short_direction}です。"
+
+    if mode == "difference":
+        if diff == 0:
+            return "差はありません。"
+        return f"差は{_format_numeric_value(abs(diff))}{unit_suffix}です。"
 
     answer = (
-        f"{base_year}年の{subject}は{base_text}{unit_suffix}で、"
-        f"{compare_year}年は{compare_text}{unit_suffix}です。"
+        f"{compare_year}年の{subject}は{compare_text}{unit_suffix}で、"
+        f"{base_year}年比{_format_numeric_value(abs(diff))}{unit_suffix}{short_direction}です。"
     )
     if diff == 0:
-        return answer + " 差はありません。"
+        return f"{compare_year}年と{base_year}年は同じです。"
 
-    answer += f" 差は{_format_numeric_value(abs(diff))}{unit_suffix}で、{direction}しています。"
     if base_value != 0:
         change_rate = abs(diff) / abs(base_value) * 100
-        answer += f" 増減率は約{change_rate:.2f}%です。"
+        answer += f" 約{_format_numeric_value(change_rate)}%{short_direction}です。"
     return answer
 
 
@@ -503,17 +570,22 @@ def _extract_numeric_comparison_answer_from_docs(user_message: str, docs) -> Opt
     if not docs or not _is_numeric_comparison_query(user_message):
         return None
 
-    target_years = _extract_distinct_years(user_message)
-    if len(target_years) < 2:
-        return None
-    target_years = sorted(target_years[:2])
-
     combined = "\n".join(
         _strip_enrichment_header(getattr(doc, "page_content", "") or "")
         for doc in docs
     )
     if not combined.strip():
         return None
+
+    target_years = _extract_distinct_years(user_message)
+    if len(target_years) < 2:
+        doc_years = _extract_distinct_years(combined)
+        if _numeric_question_mode(user_message) in {"multiple", "wari", "percent"} and len(doc_years) == 2:
+            target_years = sorted(doc_years[:2])
+        else:
+            return None
+    else:
+        target_years = sorted(target_years[:2])
 
     metric_tokens = _extract_metric_tokens(user_message)
     year_values = _extract_year_value_pairs(combined, target_years, metric_tokens)
@@ -527,6 +599,7 @@ def _extract_numeric_comparison_answer_from_docs(user_message: str, docs) -> Opt
     metric_label = _resolve_metric_label(user_message)
 
     return _build_numeric_comparison_answer(
+        user_message=user_message,
         base_year=base_year,
         compare_year=compare_year,
         base_value=base_entry["value"],
@@ -534,6 +607,53 @@ def _extract_numeric_comparison_answer_from_docs(user_message: str, docs) -> Opt
         unit=shared_unit,
         metric_label=metric_label,
     )
+
+
+def _extract_inverse_numeric_answer_from_docs(user_message: str, docs) -> Optional[str]:
+    """Solve simple inverse arithmetic questions grounded in retrieved numeric facts."""
+    if not docs or not _is_inverse_numeric_question(user_message):
+        return None
+
+    combined = "\n".join(
+        _strip_enrichment_header(getattr(doc, "page_content", "") or "")
+        for doc in docs
+    )
+    if not combined.strip():
+        return None
+
+    target_years = _extract_distinct_years(user_message)
+    if len(target_years) != 2:
+        return None
+
+    question_numbers = []
+    for match in _NUMERIC_VALUE_RE.finditer(user_message):
+        raw_value, scale, unit = match.groups()
+        parsed_value = _parse_numeric_value(raw_value, scale)
+        if parsed_value is None:
+            continue
+        question_numbers.append({"value": parsed_value, "unit": unit})
+
+    if not question_numbers:
+        return None
+
+    latest_value = max(question_numbers, key=lambda item: item["value"])
+    delta_value = min(question_numbers, key=lambda item: item["value"])
+    if latest_value["value"] == delta_value["value"]:
+        return None
+
+    if any(token in user_message for token in ["増加", "増え", "増", "多く", "上がり"]):
+        original_value = latest_value["value"] - delta_value["value"]
+    elif any(token in user_message for token in ["減少", "減り", "減", "少なく", "下がり"]):
+        original_value = latest_value["value"] + delta_value["value"]
+    else:
+        return None
+
+    if original_value < 0:
+        return None
+
+    target_year = min(target_years)
+    unit_suffix = latest_value.get("unit") or ""
+    return f"{target_year}年は{_format_numeric_value(original_value)}{unit_suffix}です。"
 
 
 def _normalize_for_match(text: str) -> str:
@@ -832,6 +952,47 @@ def _retry_scoped_retrieval_with_full_document(
         return retry
 
     return None
+
+
+def _retry_numeric_comparison_across_uploads(
+    user_message: str,
+    docs,
+    scoped_source: Optional[str],
+    scoped_doc_id: Optional[str],
+    scoped_source_type: Optional[str],
+    owner_id: Optional[str] = None,
+) -> Optional[Any]:
+    """
+    For year-over-year comparison questions, retry across all uploaded files
+    when the current single-file scope cannot support the comparison.
+    """
+    if not _is_numeric_comparison_query(user_message):
+        return None
+    if scoped_source_type != "upload":
+        return None
+    if not (scoped_source or scoped_doc_id):
+        return None
+    if docs and _extract_numeric_comparison_answer_from_docs(user_message, docs):
+        return None
+
+    retry = retrieve(
+        user_message,
+        source_type_filter="upload",
+        owner_id_filter=owner_id,
+        full_document=True,
+    )
+    retry_docs = getattr(retry, "docs", None) or []
+    if not retry_docs:
+        return None
+    if not _extract_numeric_comparison_answer_from_docs(user_message, retry_docs):
+        return None
+
+    logger.info(
+        "Retried numeric comparison across uploaded files after scoped document '%s'%s lacked sufficient year coverage.",
+        scoped_source or "scoped upload",
+        f" ({scoped_doc_id})" if scoped_doc_id else "",
+    )
+    return retry
 
 
 def _scoped_confidence_threshold(docs) -> float:
@@ -1469,6 +1630,19 @@ def handle_chat(
     )
     docs = retrieval.docs
 
+    numeric_retry = _retry_numeric_comparison_across_uploads(
+        user_message,
+        docs,
+        scoped_source,
+        scoped_doc_id,
+        scoped_source_type,
+        owner_id=user_id,
+    )
+    if numeric_retry:
+        retrieval = numeric_retry
+        docs = retrieval.docs
+        use_full_document = True
+
     has_explicit_scope = bool(scoped_source or scoped_doc_id)
     has_source_type_scope = bool(scoped_source_type)
     has_any_scope = has_explicit_scope or has_source_type_scope
@@ -1639,6 +1813,22 @@ def handle_chat(
             resolved_active_doc_id = resolved_active_doc_id or first_source.get("doc_id")
         return {
             "answer": numeric_comparison_answer,
+            "sources": sources,
+            "mode": "document_qa",
+            "active_source": resolved_active_source,
+            "active_doc_id": resolved_active_doc_id,
+        }
+
+    inverse_numeric_answer = _extract_inverse_numeric_answer_from_docs(user_message, docs)
+    if inverse_numeric_answer:
+        resolved_active_source = scoped_source or active_source
+        resolved_active_doc_id = scoped_doc_id or active_doc_id
+        if (not resolved_active_source or not resolved_active_doc_id) and sources:
+            first_source = sources[0] or {}
+            resolved_active_source = resolved_active_source or first_source.get("source")
+            resolved_active_doc_id = resolved_active_doc_id or first_source.get("doc_id")
+        return {
+            "answer": inverse_numeric_answer,
             "sources": sources,
             "mode": "document_qa",
             "active_source": resolved_active_source,
